@@ -1,560 +1,936 @@
+cat > deploy-v2ray.sh << 'ENDOFFILE'
 #!/bin/bash
 
-# GCP V2Ray VLESS Server - Minimal & Working Version
-# Optimized for Google Cloud Shell
-# Author: Assistant
-# Version: 13.0
+set -euo pipefail
 
-set -e
-
-# Colors
+# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+PURPLE='\033[0;35m'
 NC='\033[0m'
 
-print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+# Telegram Configuration
+TELEGRAM_CHANNEL="https://t.me/cvw_cvw"
+TELEGRAM_USERNAME="@iazcc"
+DEFAULT_CHANNEL_NAME="CVW Channel"
 
-# Check if running in Google Cloud Shell
-check_environment() {
-    print_info "Checking Google Cloud Shell environment..."
-    
-    if [[ -z "$CLOUD_SHELL" ]]; then
-        print_warning "This script is optimized for Google Cloud Shell"
-    fi
-    
-    if ! command -v gcloud >/dev/null 2>&1; then
-        print_error "gcloud command not found. Please use Google Cloud Shell."
-        exit 1
-    fi
-    
-    if ! command -v curl >/dev/null 2>&1; then
-        print_error "curl command not found."
-        exit 1
-    fi
-    
-    print_success "Environment check passed"
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
 
-# Check and setup authentication
-setup_authentication() {
-    print_info "Checking authentication..."
-    
-    # Check if user is logged in
-    if ! gcloud auth list --format="value(account)" | grep -q "@"; then
-        print_warning "Please login to Google Cloud"
-        gcloud auth login --no-launch-browser
+warn() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+success() {
+    echo -e "${CYAN}[SUCCESS]${NC} $1"
+}
+
+banner() {
+    echo -e "${PURPLE}"
+    echo "╔══════════════════════════════════════════════════╗"
+    echo "║               GCP V2Ray Deployer                 ║"
+    echo "║              Telegram: $TELEGRAM_USERNAME        ║"
+    echo "║              Channel: $TELEGRAM_CHANNEL          ║"
+    echo "╚══════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+# Function to validate UUID format
+validate_uuid() {
+    local uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    if [[ ! $1 =~ $uuid_pattern ]]; then
+        error "Invalid UUID format: $1"
+        return 1
     fi
+    return 0
+}
+
+# Function to validate Telegram Bot Token
+validate_bot_token() {
+    local token_pattern='^[0-9]{8,10}:[a-zA-Z0-9_-]{35}$'
+    if [[ ! $1 =~ $token_pattern ]]; then
+        error "Invalid Telegram Bot Token format"
+        return 1
+    fi
+    return 0
+}
+
+# Function to validate Channel ID
+validate_channel_id() {
+    if [[ ! $1 =~ ^-?[0-9]+$ ]]; then
+        error "Invalid Channel ID format"
+        return 1
+    fi
+    return 0
+}
+
+# Function to validate Chat ID (for bot private messages)
+validate_chat_id() {
+    if [[ ! $1 =~ ^-?[0-9]+$ ]]; then
+        error "Invalid Chat ID format"
+        return 1
+    fi
+    return 0
+}
+
+# Function to validate URL format
+validate_url() {
+    local url="$1"
+    local url_pattern='^https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(/[a-zA-Z0-9._~:/?#[\]@!$&'"'"'()*+,;=-]*)?$'
+    local telegram_pattern='^https?://t\.me/[a-zA-Z0-9_]+$'
     
-    # Get or set project
-    local current_project=$(gcloud config get-value project 2>/dev/null)
-    if [[ -z "$current_project" ]]; then
-        print_info "Available projects:"
-        gcloud projects list --format="table(projectId)" --limit=5
-        echo ""
-        read -p "Enter your PROJECT_ID: " PROJECT_ID
-        if [[ -z "$PROJECT_ID" ]]; then
-            print_error "Project ID is required"
-            exit 1
-        fi
-        gcloud config set project $PROJECT_ID
+    if [[ "$url" =~ $telegram_pattern ]] || [[ "$url" =~ $url_pattern ]]; then
+        return 0
     else
-        PROJECT_ID=$current_project
-        print_info "Using project: $PROJECT_ID"
-        read -p "Use this project? (y/n) [y]: " use_current
-        if [[ "$use_current" == "n" ]]; then
-            gcloud projects list --format="table(projectId)" --limit=5
-            echo ""
-            read -p "Enter your PROJECT_ID: " PROJECT_ID
-            gcloud config set project $PROJECT_ID
-        fi
+        error "Invalid URL format: $url"
+        return 1
     fi
 }
 
-# Get basic configuration
-get_configuration() {
-    echo ""
-    print_info "Basic Configuration"
-    echo "===================="
+# CPU selection function
+select_cpu() {
+    echo
+    info "=== CPU Configuration ==="
+    echo "1. 1 CPU Core (Default)"
+    echo "2. 2 CPU Cores"
+    echo "3. 4 CPU Cores"
+    echo "4. 8 CPU Cores"
+    echo
     
-    # Service name
-    read -p "Enter service name [vless-server]: " SERVICE_NAME
-    SERVICE_NAME=${SERVICE_NAME:-vless-server}
+    while true; do
+        read -p "Select CPU cores (1-4): " cpu_choice
+        case $cpu_choice in
+            1) CPU="1"; break ;;
+            2) CPU="2"; break ;;
+            3) CPU="4"; break ;;
+            4) CPU="8"; break ;;
+            *) echo "Invalid selection. Please enter a number between 1-4." ;;
+        esac
+    done
     
-    # Region
-    echo ""
-    print_info "Select region:"
-    echo "1. us-central1 (Recommended)"
-    echo "2. europe-west1" 
-    echo "3. asia-southeast1"
-    read -p "Choose [1]: " region_choice
-    case $region_choice in
-        2) REGION="europe-west1" ;;
-        3) REGION="asia-southeast1" ;;
-        *) REGION="us-central1" ;;
+    info "Selected CPU: $CPU core(s)"
+}
+
+# Memory selection function
+select_memory() {
+    echo
+    info "=== Memory Configuration ==="
+    
+    case $CPU in
+        1) echo "Recommended memory: 512Mi - 2Gi" ;;
+        2) echo "Recommended memory: 1Gi - 4Gi" ;;
+        4) echo "Recommended memory: 2Gi - 8Gi" ;;
+        8) echo "Recommended memory: 4Gi - 16Gi" ;;
+    esac
+    echo
+    
+    echo "Memory Options:"
+    echo "1. 512Mi"
+    echo "2. 1Gi"
+    echo "3. 2Gi"
+    echo "4. 4Gi"
+    echo "5. 8Gi"
+    echo "6. 16Gi"
+    echo
+    
+    while true; do
+        read -p "Select memory (1-6): " memory_choice
+        case $memory_choice in
+            1) MEMORY="512Mi"; break ;;
+            2) MEMORY="1Gi"; break ;;
+            3) MEMORY="2Gi"; break ;;
+            4) MEMORY="4Gi"; break ;;
+            5) MEMORY="8Gi"; break ;;
+            6) MEMORY="16Gi"; break ;;
+            *) echo "Invalid selection. Please enter a number between 1-6." ;;
+        esac
+    done
+    
+    validate_memory_config
+    info "Selected Memory: $MEMORY"
+}
+
+# Validate memory configuration based on CPU
+validate_memory_config() {
+    local cpu_num=$CPU
+    local memory_num=$(echo $MEMORY | sed 's/[^0-9]*//g')
+    local memory_unit=$(echo $MEMORY | sed 's/[0-9]*//g')
+    
+    if [[ "$memory_unit" == "Gi" ]]; then
+        memory_num=$((memory_num * 1024))
+    fi
+    
+    local min_memory=0
+    local max_memory=0
+    
+    case $cpu_num in
+        1) min_memory=512; max_memory=2048 ;;
+        2) min_memory=1024; max_memory=4096 ;;
+        4) min_memory=2048; max_memory=8192 ;;
+        8) min_memory=4096; max_memory=16384 ;;
     esac
     
-    # Telegram Bot Token only
-    echo ""
-    print_info "Telegram Bot Token (for /start command):"
-    read -p "Enter Bot Token: " TELEGRAM_BOT_TOKEN
-    
-    if [[ -z "$TELEGRAM_BOT_TOKEN" ]]; then
-        print_error "Bot token is required"
-        exit 1
+    if [[ $memory_num -lt $min_memory ]]; then
+        warn "Memory configuration ($MEMORY) might be too low for $CPU CPU core(s)."
+        warn "Recommended minimum: $((min_memory / 1024))Gi"
+        read -p "Do you want to continue with this configuration? (y/n): " confirm
+        if [[ ! $confirm =~ [Yy] ]]; then
+            select_memory
+        fi
+    elif [[ $memory_num -gt $max_memory ]]; then
+        warn "Memory configuration ($MEMORY) might be too high for $CPU CPU core(s)."
+        warn "Recommended maximum: $((max_memory / 1024))Gi"
+        read -p "Do you want to continue with this configuration? (y/n): " confirm
+        if [[ ! $confirm =~ [Yy] ]]; then
+            select_memory
+        fi
     fi
-    
-    # Verify bot token
-    print_info "Verifying bot token..."
-    if curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | grep -q \"ok\":true; then
-        BOT_USERNAME=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | grep -o '"username":"[^"]*' | cut -d'"' -f4)
-        print_success "Bot verified: @$BOT_USERNAME"
-    else
-        print_error "Invalid bot token"
-        exit 1
-    fi
-    
-    # Generate unique identifiers
-    UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)
-    PATH_SUFFIX="path-$(head /dev/urandom 2>/dev/null | tr -dc a-z0-9 | head -c 8)"
 }
 
-# Create minimal V2Ray configuration
-create_v2ray_config() {
-    print_info "Creating V2Ray configuration..."
+# Region selection function
+select_region() {
+    echo
+    info "=== Region Selection ==="
+    echo "1. us-central1 (Iowa, USA)"
+    echo "2. us-west1 (Oregon, USA)" 
+    echo "3. us-east1 (South Carolina, USA)"
+    echo "4. europe-west1 (Belgium)"
+    echo "5. asia-southeast1 (Singapore)"
+    echo "6. asia-southeast2 (Indonesia)"
+    echo "7. asia-northeast1 (Tokyo, Japan)"
+    echo "8. asia-east1 (Taiwan)"
+    echo
     
-    cat > Dockerfile << 'EOF'
-FROM alpine:latest
+    while true; do
+        read -p "Select region (1-8): " region_choice
+        case $region_choice in
+            1) REGION="us-central1"; break ;;
+            2) REGION="us-west1"; break ;;
+            3) REGION="us-east1"; break ;;
+            4) REGION="europe-west1"; break ;;
+            5) REGION="asia-southeast1"; break ;;
+            6) REGION="asia-southeast2"; break ;;
+            7) REGION="asia-northeast1"; break ;;
+            8) REGION="asia-east1"; break ;;
+            *) echo "Invalid selection. Please enter a number between 1-8." ;;
+        esac
+    done
+    
+    info "Selected region: $REGION"
+}
 
-RUN apk update && apk add --no-cache curl unzip
+# Protocol selection function
+select_protocol() {
+    echo
+    info "=== Protocol Selection ==="
+    echo "1. Trojan WS (Recommended)"
+    echo "2. VLESS WS"
+    echo "3. VLESS gRPC"
+    echo "4. VMess WS"
+    echo
+    
+    while true; do
+        read -p "Select protocol (1-4): " protocol_choice
+        case $protocol_choice in
+            1) PROTOCOL="trojan-ws"; break ;;
+            2) PROTOCOL="vless-ws"; break ;;
+            3) PROTOCOL="vless-grpc"; break ;;
+            4) PROTOCOL="vmess-ws"; break ;;
+            *) echo "Invalid selection. Please enter a number between 1-4." ;;
+        esac
+    done
+    
+    info "Selected protocol: $PROTOCOL"
+}
 
-# Download and install V2Ray
-RUN curl -L https://github.com/v2fly/v2ray-core/releases/download/v5.7.0/v2ray-linux-64.zip -o v2ray.zip \
-    && unzip -j v2ray.zip v2ray -d /usr/bin/ \
-    && chmod +x /usr/bin/v2ray \
-    && rm v2ray.zip \
-    && mkdir -p /etc/v2ray
+# Telegram destination selection
+select_telegram_destination() {
+    echo
+    info "=== Telegram Destination ==="
+    echo "1. Send to Channel only"
+    echo "2. Send to Bot private message only" 
+    echo "3. Send to both Channel and Bot"
+    echo "4. Don't send to Telegram"
+    echo
+    
+    while true; do
+        read -p "Select destination (1-4): " telegram_choice
+        case $telegram_choice in
+            1) 
+                TELEGRAM_DESTINATION="channel"
+                while true; do
+                    read -p "Enter Telegram Channel ID: " TELEGRAM_CHANNEL_ID
+                    if validate_channel_id "$TELEGRAM_CHANNEL_ID"; then
+                        break
+                    fi
+                done
+                break 
+                ;;
+            2) 
+                TELEGRAM_DESTINATION="bot"
+                while true; do
+                    read -p "Enter your Chat ID (for bot private message): " TELEGRAM_CHAT_ID
+                    if validate_chat_id "$TELEGRAM_CHAT_ID"; then
+                        break
+                    fi
+                done
+                break 
+                ;;
+            3) 
+                TELEGRAM_DESTINATION="both"
+                while true; do
+                    read -p "Enter Telegram Channel ID: " TELEGRAM_CHANNEL_ID
+                    if validate_channel_id "$TELEGRAM_CHANNEL_ID"; then
+                        break
+                    fi
+                done
+                while true; do
+                    read -p "Enter your Chat ID (for bot private message): " TELEGRAM_CHAT_ID
+                    if validate_chat_id "$TELEGRAM_CHAT_ID"; then
+                        break
+                    fi
+                done
+                break 
+                ;;
+            4) 
+                TELEGRAM_DESTINATION="none"
+                break 
+                ;;
+            *) echo "Invalid selection. Please enter a number between 1-4." ;;
+        esac
+    done
+}
 
-COPY config.json /etc/v2ray/
+# Channel URL input function
+get_channel_url() {
+    echo
+    info "=== Channel URL Configuration ==="
+    echo "Default URL: $TELEGRAM_CHANNEL"
+    echo "Channel Name: $DEFAULT_CHANNEL_NAME"
+    echo "You can use the default URL or enter your own custom URL."
+    echo
+    
+    while true; do
+        read -p "Enter Channel URL [default: $TELEGRAM_CHANNEL]: " CHANNEL_URL
+        CHANNEL_URL=${CHANNEL_URL:-"$TELEGRAM_CHANNEL"}
+        
+        CHANNEL_URL=$(echo "$CHANNEL_URL" | sed 's|/*$||')
+        
+        if validate_url "$CHANNEL_URL"; then
+            break
+        else
+            warn "Please enter a valid URL"
+        fi
+    done
+    
+    # Extract channel name for button text
+    if [[ "$CHANNEL_URL" == *"t.me/"* ]]; then
+        CHANNEL_NAME=$(echo "$CHANNEL_URL" | sed 's|.*t.me/||' | sed 's|/*$||')
+    else
+        CHANNEL_NAME=$(echo "$CHANNEL_URL" | sed 's|.*://||' | sed 's|/.*||' | sed 's|www\.||')
+    fi
+    
+    if [[ -z "$CHANNEL_NAME" ]]; then
+        CHANNEL_NAME="$DEFAULT_CHANNEL_NAME"
+    fi
+    
+    if [[ ${#CHANNEL_NAME} -gt 20 ]]; then
+        CHANNEL_NAME="${CHANNEL_NAME:0:17}..."
+    fi
+    
+    info "Channel URL: $CHANNEL_URL"
+    info "Channel Name: $CHANNEL_NAME"
+}
+
+# User input function
+get_user_input() {
+    echo
+    info "=== Service Configuration ==="
+    
+    # Service Name
+    while true; do
+        read -p "Enter service name: " SERVICE_NAME
+        if [[ -n "$SERVICE_NAME" ]]; then
+            break
+        else
+            error "Service name cannot be empty"
+        fi
+    done
+    
+    # UUID
+    while true; do
+        read -p "Enter UUID: " UUID
+        UUID=${UUID:-"ba0e3984-ccc9-48a3-8074-b2f507f41ce8"}
+        if validate_uuid "$UUID"; then
+            break
+        fi
+    done
+    
+    # Telegram Bot Token (required for any Telegram option)
+    if [[ "$TELEGRAM_DESTINATION" != "none" ]]; then
+        while true; do
+            read -p "Enter Telegram Bot Token: " TELEGRAM_BOT_TOKEN
+            if validate_bot_token "$TELEGRAM_BOT_TOKEN"; then
+                break
+            fi
+        done
+    fi
+    
+    # Host Domain (optional)
+    read -p "Enter host domain [default: m.googleapis.com]: " HOST_DOMAIN
+    HOST_DOMAIN=${HOST_DOMAIN:-"m.googleapis.com"}
+    
+    # Get Channel URL if Telegram is enabled
+    if [[ "$TELEGRAM_DESTINATION" != "none" ]]; then
+        get_channel_url
+    fi
+}
+
+# Display configuration summary
+show_config_summary() {
+    echo
+    success "=== Configuration Summary ==="
+    echo "Project ID:    $(gcloud config get-value project)"
+    echo "Region:        $REGION"
+    echo "Protocol:      $PROTOCOL"
+    echo "Service Name:  $SERVICE_NAME"
+    echo "Host Domain:   $HOST_DOMAIN"
+    echo "UUID:          $UUID"
+    echo "CPU:           $CPU core(s)"
+    echo "Memory:        $MEMORY"
+    
+    if [[ "$TELEGRAM_DESTINATION" != "none" ]]; then
+        echo "Bot Token:     ${TELEGRAM_BOT_TOKEN:0:8}..."
+        echo "Destination:   $TELEGRAM_DESTINATION"
+        if [[ "$TELEGRAM_DESTINATION" == "channel" || "$TELEGRAM_DESTINATION" == "both" ]]; then
+            echo "Channel ID:    $TELEGRAM_CHANNEL_ID"
+        fi
+        if [[ "$TELEGRAM_DESTINATION" == "bot" || "$TELEGRAM_DESTINATION" == "both" ]]; then
+            echo "Chat ID:       $TELEGRAM_CHAT_ID"
+        fi
+        echo "Channel URL:   $CHANNEL_URL"
+        echo "Button Text:   $CHANNEL_NAME"
+    else
+        echo "Telegram:      Not configured"
+    fi
+    echo
+    
+    while true; do
+        read -p "Proceed with deployment? (y/n): " confirm
+        case $confirm in
+            [Yy]* ) break;;
+            [Nn]* ) 
+                info "Deployment cancelled by user"
+                exit 0
+                ;;
+            * ) echo "Please answer yes (y) or no (n).";;
+        esac
+    done
+}
+
+# Validation functions
+validate_prerequisites() {
+    log "Validating prerequisites..."
+    
+    if ! command -v gcloud &> /dev/null; then
+        error "gcloud CLI is not installed. Please install Google Cloud SDK."
+        exit 1
+    fi
+    
+    if ! command -v git &> /dev/null; then
+        error "git is not installed. Please install git."
+        exit 1
+    fi
+    
+    local PROJECT_ID=$(gcloud config get-value project)
+    if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "(unset)" ]]; then
+        error "No project configured. Run: gcloud config set project PROJECT_ID"
+        exit 1
+    fi
+}
+
+cleanup() {
+    log "Cleaning up temporary files..."
+    if [[ -d "gcp-v2ray" ]]; then
+        rm -rf gcp-v2ray
+    fi
+}
+
+send_to_telegram() {
+    local chat_id="$1"
+    local message="$2"
+    local response
+    
+    # Create inline keyboard with dynamic button
+    local keyboard=$(cat << EOF
+{
+    "inline_keyboard": [[
+        {
+            "text": "$CHANNEL_NAME",
+            "url": "$CHANNEL_URL"
+        }
+    ]]
+}
+EOF
+)
+    
+    response=$(curl -s -w "%{http_code}" -X POST \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"chat_id\": \"${chat_id}\",
+            \"text\": \"$message\",
+            \"parse_mode\": \"MARKDOWN\",
+            \"disable_web_page_preview\": true,
+            \"reply_markup\": $keyboard
+        }" \
+        https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage)
+    
+    local http_code="${response: -3}"
+    local content="${response%???}"
+    
+    if [[ "$http_code" == "200" ]]; then
+        return 0
+    else
+        error "Failed to send to Telegram (HTTP $http_code): $content"
+        return 1
+    fi
+}
+
+send_deployment_notification() {
+    local message="$1"
+    local success_count=0
+    
+    case $TELEGRAM_DESTINATION in
+        "channel")
+            log "Sending to Telegram Channel..."
+            if send_to_telegram "$TELEGRAM_CHANNEL_ID" "$message"; then
+                log "✅ Successfully sent to Telegram Channel"
+                success_count=$((success_count + 1))
+            else
+                error "❌ Failed to send to Telegram Channel"
+            fi
+            ;;
+            
+        "bot")
+            log "Sending to Bot private message..."
+            if send_to_telegram "$TELEGRAM_CHAT_ID" "$message"; then
+                log "✅ Successfully sent to Bot private message"
+                success_count=$((success_count + 1))
+            else
+                error "❌ Failed to send to Bot private message"
+            fi
+            ;;
+            
+        "both")
+            log "Sending to both Channel and Bot..."
+            
+            if send_to_telegram "$TELEGRAM_CHANNEL_ID" "$message"; then
+                log "✅ Successfully sent to Telegram Channel"
+                success_count=$((success_count + 1))
+            else
+                error "❌ Failed to send to Telegram Channel"
+            fi
+            
+            if send_to_telegram "$TELEGRAM_CHAT_ID" "$message"; then
+                log "✅ Successfully sent to Bot private message"
+                success_count=$((success_count + 1))
+            else
+                error "❌ Failed to send to Bot private message"
+            fi
+            ;;
+            
+        "none")
+            log "Skipping Telegram notification as configured"
+            return 0
+            ;;
+    esac
+    
+    if [[ $success_count -gt 0 ]]; then
+        log "Telegram notification completed ($success_count successful)"
+        return 0
+    else
+        warn "All Telegram notifications failed, but deployment was successful"
+        return 1
+    fi
+}
+
+# Get appropriate Docker image based on protocol
+get_docker_image() {
+    case $PROTOCOL in
+        "trojan-ws")
+            echo "docker.io/nkka404/trojan-ws:latest"
+            ;;
+        "vless-ws")
+            echo "docker.io/nkka404/vless-ws:latest"
+            ;;
+        "vless-grpc")
+            echo "docker.io/nkka404/vless-grpc:latest"
+            ;;
+        "vmess-ws")
+            echo "docker.io/n4pro/vmess:latest"
+            ;;
+        *)
+            echo "docker.io/nkka404/trojan-ws:latest"
+            ;;
+    esac
+}
+
+# Create appropriate configuration based on protocol
+create_config() {
+    local config_file="config.json"
+    
+    case $PROTOCOL in
+        "trojan-ws")
+            cat > $config_file << EOF
+{
+  "inbounds": [
+    {
+      "port": 8080,
+      "protocol": "trojan",
+      "settings": {
+        "clients": [
+          {
+            "password": "Trojan-2025",
+            "level": 0
+          }
+        ],
+        "fallbacks": []
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "/tg-@iazcc"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}
+EOF
+            ;;
+        "vless-ws")
+            cat > $config_file << EOF
+{
+  "inbounds": [
+    {
+      "port": 8080,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "$UUID",
+            "level": 0
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "/tg-@iazcc"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}
+EOF
+            ;;
+        "vless-grpc")
+            cat > $config_file << EOF
+{
+  "inbounds": [
+    {
+      "port": 8080,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "$UUID",
+            "level": 0
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "none",
+        "grpcSettings": {
+          "serviceName": "vless-grpc-service"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}
+EOF
+            ;;
+        "vmess-ws")
+            cat > $config_file << EOF
+{
+  "inbounds": [
+    {
+      "port": 8080,
+      "protocol": "vmess",
+      "settings": {
+        "clients": [
+          {
+            "id": "$UUID",
+            "level": 0,
+            "alterId": 0
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "/tg-@iazcc"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}
+EOF
+            ;;
+    esac
+}
+
+create_dockerfile() {
+    cat > Dockerfile << EOF
+FROM v2fly/v2fly-core:latest
+
+COPY config.json /etc/v2ray/config.json
 
 EXPOSE 8080
 
 CMD ["v2ray", "run", "-config", "/etc/v2ray/config.json"]
 EOF
-
-    cat > config.json << EOF
-{
-    "log": {
-        "loglevel": "warning"
-    },
-    "inbounds": [
-        {
-            "port": 8080,
-            "protocol": "vless",
-            "settings": {
-                "clients": [
-                    {
-                        "id": "$UUID",
-                        "level": 0
-                    }
-                ],
-                "decryption": "none"
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "tls",
-                "wsSettings": {
-                    "path": "/$PATH_SUFFIX"
-                }
-            }
-        }
-    ],
-    "outbounds": [
-        {
-            "protocol": "freedom",
-            "settings": {}
-        }
-    ]
-}
-EOF
 }
 
-# Create simple Telegram bot webhook handler
-create_bot_handler() {
-    print_info "Creating Telegram bot webhook handler..."
+main() {
+    banner
     
-    cat > app.py << EOF
-import os
-import requests
-from flask import Flask, request, jsonify
-
-app = Flask(__name__)
-
-BOT_TOKEN = os.environ.get('BOT_TOKEN')
-VLESS_LINK = os.environ.get('VLESS_LINK')
-
-def send_message(chat_id, text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {
-        'chat_id': chat_id,
-        'text': text,
-        'parse_mode': 'HTML'
-    }
-    try:
-        requests.post(url, json=data, timeout=5)
-    except:
-        pass
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    try:
-        data = request.get_json()
-        if 'message' in data:
-            chat_id = data['message']['chat']['id']
-            text = data['message'].get('text', '')
-            
-            if text == '/start':
-                message = f"🔗 Your VLESS Configuration:\\n<code>{VLESS_LINK}</code>\\n\\n📋 Copy and use in V2Ray client"
-                send_message(chat_id, message)
-            elif text == '/status':
-                send_message(chat_id, "✅ Server is online")
-            elif text == '/info':
-                send_message(chat_id, "⚡ V2Ray VLESS Server\\n🔒 TLS + WebSocket")
-                
-        return jsonify({'status': 'ok'})
-    except:
-        return jsonify({'status': 'error'})
-
-@app.route('/')
-def home():
-    return jsonify({'status': 'running'})
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=False)
-EOF
-
-    cat > requirements.txt << 'EOF'
-Flask==2.3.3
-requests==2.31.0
-EOF
-
-    cat > bot.Dockerfile << 'EOF'
-FROM python:3.9-slim
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY app.py .
-
-CMD ["python", "app.py"]
-EOF
-}
-
-# Enable required services
-enable_services() {
-    print_info "Enabling required Google Cloud services..."
+    # Get user input
+    select_region
+    select_cpu
+    select_memory
+    select_protocol
+    select_telegram_destination
+    get_user_input
+    show_config_summary
     
-    for service in run.googleapis.com containerregistry.googleapis.com cloudbuild.googleapis.com; do
-        if ! gcloud services list --enabled --filter="name:$service" | grep -q "$service"; then
-            gcloud services enable "$service" --quiet
-        fi
-    done
-    print_success "Services enabled"
-}
-
-# Deploy V2Ray service
-deploy_v2ray() {
-    print_info "Deploying V2Ray service..."
+    PROJECT_ID=$(gcloud config get-value project)
     
-    enable_services
+    log "Starting Cloud Run deployment..."
+    log "Project: $PROJECT_ID"
+    log "Region: $REGION"
+    log "Service: $SERVICE_NAME"
+    log "Protocol: $PROTOCOL"
+    log "CPU: $CPU core(s)"
+    log "Memory: $MEMORY"
     
-    # Build and deploy
-    if gcloud builds submit --tag "gcr.io/$PROJECT_ID/$SERVICE_NAME" --quiet && \
-       gcloud run deploy "$SERVICE_NAME" \
-        --image "gcr.io/$PROJECT_ID/$SERVICE_NAME" \
-        --platform managed \
-        --region "$REGION" \
-        --allow-unauthenticated \
-        --port 8080 \
-        --cpu 1 \
-        --memory "512Mi" \
-        --min-instances 1 \
-        --max-instances 3 \
-        --quiet; then
-        print_success "V2Ray service deployed"
-        return 0
-    else
-        print_error "V2Ray deployment failed"
-        return 1
-    fi
-}
-
-# Deploy bot service
-deploy_bot() {
-    print_info "Deploying bot service..."
+    validate_prerequisites
     
-    BOT_SERVICE_NAME="${SERVICE_NAME}-bot"
+    # Set trap for cleanup
+    trap cleanup EXIT
     
-    if gcloud builds submit --tag "gcr.io/$PROJECT_ID/$BOT_SERVICE_NAME" --quiet && \
-       gcloud run deploy "$BOT_SERVICE_NAME" \
-        --image "gcr.io/$PROJECT_ID/$BOT_SERVICE_NAME" \
-        --platform managed \
-        --region "$REGION" \
-        --allow-unauthenticated \
-        --port 8080 \
-        --cpu 1 \
-        --memory "256Mi" \
-        --set-env-vars="BOT_TOKEN=$TELEGRAM_BOT_TOKEN,VLESS_LINK=$VLESS_LINK" \
-        --min-instances 0 \
-        --max-instances 3 \
-        --quiet; then
-        print_success "Bot service deployed"
-        return 0
-    else
-        print_error "Bot deployment failed"
-        return 1
-    fi
-}
-
-# Get service URLs
-get_urls() {
-    SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
-        --platform managed \
-        --region "$REGION" \
-        --format="value(status.url)" 2>/dev/null)
+    log "Enabling required APIs..."
+    gcloud services enable \
+        cloudbuild.googleapis.com \
+        run.googleapis.com \
+        iam.googleapis.com \
+        --quiet
     
-    BOT_SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}-bot" \
-        --platform managed \
-        --region "$REGION" \
-        --format="value(status.url)" 2>/dev/null)
-    
-    if [[ -n "$SERVICE_URL" && -n "$BOT_SERVICE_URL" ]]; then
-        print_success "Services URLs obtained"
-        return 0
-    else
-        print_error "Failed to get service URLs"
-        return 1
-    fi
-}
-
-# Generate VLESS link
-generate_vless_link() {
-    local domain=$(echo "$SERVICE_URL" | sed 's|https://||')
-    VLESS_LINK="vless://${UUID}@${domain}:443?path=%2F${PATH_SUFFIX}&security=tls&type=ws&sni=${domain}#${SERVICE_NAME}"
-    print_success "VLESS link generated"
-}
-
-# Setup Telegram webhook
-setup_webhook() {
-    print_info "Setting up Telegram webhook..."
-    
-    local webhook_url="${BOT_SERVICE_URL}/webhook"
-    
-    # Set webhook
-    if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
-        -d "url=${webhook_url}" | grep -q \"ok\":true; then
-        print_success "Webhook configured"
-    else
-        print_warning "Webhook setup may need retry"
-    fi
-    
-    # Set commands
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setMyCommands" \
-        -d '{"commands": [{"command": "start", "description": "Get VLESS link"}]}' > /dev/null
-}
-
-# Wait for services to be ready
-wait_for_services() {
-    print_info "Waiting for services to be ready..."
-    sleep 20
-    
-    if curl -s --max-time 10 "$SERVICE_URL" > /dev/null; then
-        print_success "V2Ray service is ready"
-    else
-        print_warning "V2Ray service starting..."
-    fi
-}
-
-# Cleanup temporary files
-cleanup() {
-    rm -f Dockerfile config.json app.py requirements.txt bot.Dockerfile
-}
-
-# Display final information
-show_results() {
-    local domain=$(echo "$SERVICE_URL" | sed 's|https://||')
-    
-    echo ""
-    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║                      DEPLOYMENT SUCCESS!                    ║${NC}"
-    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "${BLUE}📊 DEPLOYMENT INFO:${NC}"
-    echo "  Project: $PROJECT_ID"
-    echo "  Service: $SERVICE_NAME"
-    echo "  Region: $REGION"
-    echo "  Domain: $domain"
-    echo ""
-    echo -e "${BLUE}🔧 CONFIGURATION:${NC}"
-    echo "  UUID: $UUID"
-    echo "  Path: /$PATH_SUFFIX"
-    echo ""
-    echo -e "${BLUE}🤖 BOT INFO:${NC}"
-    echo "  Bot: @$BOT_USERNAME"
-    echo "  Try: /start command"
-    echo ""
-    echo -e "${GREEN}🔗 VLESS LINK:${NC}"
-    echo "$VLESS_LINK"
-    echo ""
-}
-
-# Main deployment function
-deploy_server() {
-    clear
-    echo -e "${BLUE}"
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║               V2Ray VLESS Server Deployer                   ║"
-    echo "║                 Google Cloud Shell Edition                  ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-    
-    # Step 1: Environment checks
-    check_environment
-    setup_authentication
-    
-    # Step 2: Get configuration
-    get_configuration
-    
-    # Step 3: Show summary
-    echo ""
-    print_info "Deployment Summary:"
-    echo "• Project: $PROJECT_ID"
-    echo "• Service: $SERVICE_NAME"
-    echo "• Region: $REGION"
-    echo "• Bot: @$BOT_USERNAME"
-    echo ""
-    
-    read -p "Continue with deployment? (y/n) [y]: " confirm
-    if [[ "${confirm:-y}" != "y" ]]; then
-        print_info "Deployment cancelled"
-        exit 0
-    fi
-    
-    # Step 4: Deploy V2Ray
-    create_v2ray_config
-    if ! deploy_v2ray; then
-        print_error "V2Ray deployment failed"
-        exit 1
-    fi
-    
-    # Step 5: Get URL and generate link
-    if ! get_urls; then
-        print_error "Failed to get service URLs"
-        exit 1
-    fi
-    generate_vless_link
-    
-    # Step 6: Deploy bot
-    create_bot_handler
-    if ! deploy_bot; then
-        print_error "Bot deployment failed"
-        exit 1
-    fi
-    
-    # Step 7: Setup webhook and wait
-    get_urls
-    setup_webhook
-    wait_for_services
-    
-    # Step 8: Show results
-    show_results
+    # Clean up any existing directory
     cleanup
     
-    echo ""
-    print_success "✅ Deployment completed successfully!"
-    echo ""
-}
-
-# Stop server function
-stop_server() {
-    clear
-    echo -e "${YELLOW}"
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║                   Stop V2Ray Server                         ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
+    # Create local files instead of cloning from repository
+    log "Creating configuration files locally..."
+    mkdir -p gcp-v2ray
+    cd gcp-v2ray
     
-    setup_authentication
+    # Create configuration files
+    create_config
+    create_dockerfile
     
-    echo ""
-    print_info "Current services:"
-    gcloud run services list --region="*" --format="table(NAME,REGION,STATUS)" --limit=10
-    
-    echo ""
-    read -p "Enter service name to stop: " service_name
-    
-    if [[ -z "$service_name" ]]; then
-        print_error "Service name required"
+    log "Building container image..."
+    if ! gcloud builds submit --tag gcr.io/${PROJECT_ID}/gcp-v2ray-image --quiet; then
+        error "Build failed"
         exit 1
     fi
     
-    # Find service region
-    local service_region=$(gcloud run services list --filter="NAME:$service_name" --format="value(REGION)" --limit=1)
-    
-    if [[ -z "$service_region" ]]; then
-        print_error "Service not found"
+    log "Deploying to Cloud Run..."
+    if ! gcloud run deploy ${SERVICE_NAME} \
+        --image gcr.io/${PROJECT_ID}/gcp-v2ray-image \
+        --platform managed \
+        --region ${REGION} \
+        --allow-unauthenticated \
+        --cpu ${CPU} \
+        --memory ${MEMORY} \
+        --quiet; then
+        error "Deployment failed"
         exit 1
     fi
     
-    print_warning "This will delete: $service_name (Region: $service_region)"
-    read -p "Are you sure? (y/n) [n]: " confirm
+    # Get the service URL
+    SERVICE_URL=$(gcloud run services describe ${SERVICE_NAME} \
+        --region ${REGION} \
+        --format 'value(status.url)' \
+        --quiet)
     
-    if [[ "$confirm" == "y" ]]; then
-        gcloud run services delete "$service_name" --region="$service_region" --quiet
-        print_success "Service $service_name deleted"
-        
-        # Try to delete bot service
-        local bot_service="${service_name}-bot"
-        if gcloud run services describe "$bot_service" --region="$service_region" &>/dev/null; then
-            gcloud run services delete "$bot_service" --region="$service_region" --quiet
-            print_success "Bot service $bot_service deleted"
-        fi
-    else
-        print_info "Cancelled"
-    fi
+    DOMAIN=$(echo $SERVICE_URL | sed 's|https://||')
+    
+    # Create share link based on protocol
+    case $PROTOCOL in
+        "trojan-ws")
+            SHARE_LINK="trojan://Trojan-2025@${HOST_DOMAIN}:443?path=%2Ftg-%40iazcc&security=tls&alpn=h3%2Ch2%2Chttp%2F1.1&host=${DOMAIN}&fp=randomized&type=ws&sni=${DOMAIN}#${SERVICE_NAME}"
+            ;;
+        "vless-ws")
+            SHARE_LINK="vless://${UUID}@${HOST_DOMAIN}:443?path=%2Ftg-%40iazcc&security=tls&alpn=h3%2Ch2%2Chttp%2F1.1&encryption=none&host=${DOMAIN}&fp=randomized&type=ws&sni=${DOMAIN}#${SERVICE_NAME}"
+            ;;
+        "vless-grpc")
+            SHARE_LINK="vless://${UUID}@${HOST_DOMAIN}:443?mode=gun&security=tls&encryption=none&type=grpc&serviceName=vless-grpc-service&sni=${DOMAIN}#${SERVICE_NAME}"
+            ;;
+        "vmess-ws")
+            VMESS_CONFIG=$(cat << EOF
+{
+  "v": "2",
+  "ps": "${SERVICE_NAME}",
+  "add": "${HOST_DOMAIN}",
+  "port": "443",
+  "id": "${UUID}",
+  "aid": "0",
+  "scy": "auto",
+  "net": "ws",
+  "type": "none",
+  "host": "${DOMAIN}",
+  "path": "/tg-@iazcc",
+  "tls": "tls",
+  "sni": "${DOMAIN}",
+  "alpn": "h3,h2,http/1.1",
+  "fp": "randomized"
 }
-
-# Main menu
-main_menu() {
-    clear
-    echo -e "${BLUE}"
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║                 V2Ray Server Manager                        ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-    echo "1. Deploy New V2Ray Server"
-    echo "2. Stop Existing Server"
-    echo "3. Exit"
-    echo ""
-    read -p "Choose option [1]: " choice
-    
-    case $choice in
-        2) stop_server ;;
-        3) exit 0 ;;
-        *) deploy_server ;;
+EOF
+)
+            SHARE_LINK="vmess://$(echo "$VMESS_CONFIG" | base64 -w 0)"
+            ;;
     esac
     
-    echo ""
-    read -p "Press Enter to continue..."
-    main_menu
+    # Create beautiful telegram message with emojis
+    MESSAGE="🚀 *GCP V2Ray Deployment Successful* 🚀
+━━━━━━━━━━━━━━━━━━━━
+✨ *Deployment Details:*
+• *Project:* \`${PROJECT_ID}\`
+• *Service:* \`${SERVICE_NAME}\`
+• *Region:* \`${REGION}\`
+• *Protocol:* \`${PROTOCOL^^}\`
+• *Resources:* \`${CPU} CPU | ${MEMORY} RAM\`
+• *Domain:* \`${DOMAIN}\`
+
+🔗 *Configuration Link:*
+\`\`\`
+${SHARE_LINK}
+\`\`\`
+📝 *Usage Instructions:*
+1. Copy the above configuration link
+2. Open your V2Ray client
+3. Import from clipboard
+4. Connect and enjoy! 🎉
+━━━━━━━━━━━━━━━━━━━━"
+
+    # Create console message
+    CONSOLE_MESSAGE="🚀 GCP V2Ray Deployment Successful 🚀
+━━━━━━━━━━━━━━━━━━━━
+✨ Deployment Details:
+• Project: ${PROJECT_ID}
+• Service: ${SERVICE_NAME}
+• Region: ${REGION}
+• Protocol: ${PROTOCOL^^}
+• Resources: ${CPU} CPU | ${MEMORY} RAM
+• Domain: ${DOMAIN}
+
+🔗 Configuration Link:
+${SHARE_LINK}
+
+📝 Usage Instructions:
+1. Copy the above configuration link
+2. Open your V2Ray client  
+3. Import from clipboard
+4. Connect and enjoy! 🎉
+━━━━━━━━━━━━━━━━━━━━"
+    
+    # Save to file
+    echo "$CONSOLE_MESSAGE" > deployment-info.txt
+    log "Deployment info saved to deployment-info.txt"
+    
+    # Display locally
+    echo
+    success "=== Deployment Information ==="
+    echo "$CONSOLE_MESSAGE"
+    echo
+    
+    # Send to Telegram based on user selection
+    if [[ "$TELEGRAM_DESTINATION" != "none" ]]; then
+        log "Sending deployment info to Telegram..."
+        send_deployment_notification "$MESSAGE"
+    else
+        log "Skipping Telegram notification as per user selection"
+    fi
+    
+    success "Deployment completed successfully!"
+    log "Service URL: $SERVICE_URL"
+    log "Configuration saved to: deployment-info.txt"
+    log "Telegram Channel: $TELEGRAM_CHANNEL"
+    log "Username: $TELEGRAM_USERNAME"
 }
 
-# Handle interrupts
-trap 'echo ""; print_error "Script interrupted"; cleanup; exit 1' SIGINT
+# Run main function
+main "$@"
+ENDOFFILE
 
-# Start the script
-main_menu
+chmod +x deploy-v2ray.sh
+./deploy-v2ray.sh
