@@ -55,28 +55,6 @@ validate_uuid() {
     fi
 }
 
-# Function to validate Telegram Bot Token
-validate_bot_token() {
-    local token_pattern='^[0-9]{8,10}:[a-zA-Z0-9_-]{35}$'
-    if [[ ! $1 =~ $token_pattern ]]; then
-        error "Invalid Telegram Bot Token format"
-    fi
-}
-
-# Function to validate Channel ID
-validate_channel_id() {
-    if [[ ! $1 =~ ^-?[0-9]+$ ]]; then
-        error "Invalid Channel ID format"
-    fi
-}
-
-# Function to validate Chat ID
-validate_chat_id() {
-    if [[ ! $1 =~ ^-?[0-9]+$ ]]; then
-        error "Invalid Chat ID format"
-    fi
-}
-
 # CPU selection function
 select_cpu() {
     echo
@@ -84,18 +62,16 @@ select_cpu() {
     echo "1. 1 CPU Core"
     echo "2. 2 CPU Cores" 
     echo "3. 4 CPU Cores"
-    echo "4. 8 CPU Cores"
     echo
     
     while true; do
-        read -p "Select CPU cores (1-4) [default: 1]: " cpu_choice
+        read -p "Select CPU cores (1-3) [default: 1]: " cpu_choice
         cpu_choice=${cpu_choice:-1}
         case $cpu_choice in
             1) CPU="1"; break ;;
             2) CPU="2"; break ;;
             3) CPU="4"; break ;;
-            4) CPU="8"; break ;;
-            *) echo "Invalid selection. Please enter 1-4." ;;
+            *) echo "Invalid selection. Please enter 1-3." ;;
         esac
     done
     info "Selected CPU: $CPU core(s)"
@@ -107,10 +83,9 @@ select_memory() {
     info "=== Memory Configuration ==="
     
     case $CPU in
-        1) echo "Recommended: 512Mi - 2Gi" ;;
-        2) echo "Recommended: 1Gi - 4Gi" ;;
-        4) echo "Recommended: 2Gi - 8Gi" ;;
-        8) echo "Recommended: 4Gi - 16Gi" ;;
+        1) echo "Recommended: 512Mi - 1Gi" ;;
+        2) echo "Recommended: 1Gi - 2Gi" ;;
+        4) echo "Recommended: 2Gi - 4Gi" ;;
     esac
     echo
     
@@ -119,21 +94,17 @@ select_memory() {
     echo "2. 1Gi" 
     echo "3. 2Gi"
     echo "4. 4Gi"
-    echo "5. 8Gi"
-    echo "6. 16Gi"
     echo
     
     while true; do
-        read -p "Select memory (1-6) [default: 3]: " memory_choice
-        memory_choice=${memory_choice:-3}
+        read -p "Select memory (1-4) [default: 2]: " memory_choice
+        memory_choice=${memory_choice:-2}
         case $memory_choice in
             1) MEMORY="512Mi"; break ;;
             2) MEMORY="1Gi"; break ;;
             3) MEMORY="2Gi"; break ;;
             4) MEMORY="4Gi"; break ;;
-            5) MEMORY="8Gi"; break ;;
-            6) MEMORY="16Gi"; break ;;
-            *) echo "Invalid selection. Please enter 1-6." ;;
+            *) echo "Invalid selection. Please enter 1-4." ;;
         esac
     done
     info "Selected Memory: $MEMORY"
@@ -148,13 +119,10 @@ select_region() {
     echo "3. us-east1 (South Carolina, USA)" 
     echo "4. europe-west1 (Belgium)"
     echo "5. asia-southeast1 (Singapore)"
-    echo "6. asia-southeast2 (Indonesia)"
-    echo "7. asia-northeast1 (Tokyo, Japan)"
-    echo "8. asia-east1 (Taiwan)"
     echo
     
     while true; do
-        read -p "Select region (1-8) [default: 1]: " region_choice
+        read -p "Select region (1-5) [default: 1]: " region_choice
         region_choice=${region_choice:-1}
         case $region_choice in
             1) REGION="us-central1"; break ;;
@@ -162,10 +130,7 @@ select_region() {
             3) REGION="us-east1"; break ;;
             4) REGION="europe-west1"; break ;;
             5) REGION="asia-southeast1"; break ;;
-            6) REGION="asia-southeast2"; break ;;
-            7) REGION="asia-northeast1"; break ;;
-            8) REGION="asia-east1"; break ;;
-            *) echo "Invalid selection. Please enter 1-8." ;;
+            *) echo "Invalid selection. Please enter 1-5." ;;
         esac
     done
     info "Selected region: $REGION"
@@ -177,93 +142,20 @@ select_protocol() {
     info "=== Protocol Selection ==="
     echo "1. Trojan WS"
     echo "2. VLESS WS"
-    echo "3. VLESS gRPC" 
-    echo "4. VMess WS"
+    echo "3. VMess WS"
     echo
     
     while true; do
-        read -p "Select protocol (1-4) [default: 1]: " protocol_choice
+        read -p "Select protocol (1-3) [default: 1]: " protocol_choice
         protocol_choice=${protocol_choice:-1}
         case $protocol_choice in
             1) PROTOCOL="trojan"; break ;;
             2) PROTOCOL="vless"; break ;;
-            3) PROTOCOL="vless-grpc"; break ;;
-            4) PROTOCOL="vmess"; break ;;
-            *) echo "Invalid selection. Please enter 1-4." ;;
+            3) PROTOCOL="vmess"; break ;;
+            *) echo "Invalid selection. Please enter 1-3." ;;
         esac
     done
     info "Selected protocol: $PROTOCOL"
-}
-
-# Telegram destination selection
-select_telegram_destination() {
-    echo
-    info "=== Telegram Destination ==="
-    echo "1. Send to Channel"
-    echo "2. Send to Bot private message"
-    echo "3. Send to both Channel and Bot" 
-    echo "4. Don't send to Telegram"
-    echo
-    
-    while true; do
-        read -p "Select destination (1-4) [default: 4]: " telegram_choice
-        telegram_choice=${telegram_choice:-4}
-        case $telegram_choice in
-            1) 
-                TELEGRAM_DESTINATION="channel"
-                while true; do
-                    read -p "Enter Telegram Channel ID: " TELEGRAM_CHANNEL_ID
-                    if [[ -n "$TELEGRAM_CHANNEL_ID" ]]; then
-                        validate_channel_id "$TELEGRAM_CHANNEL_ID"
-                        break
-                    else
-                        warn "Channel ID cannot be empty"
-                    fi
-                done
-                break 
-                ;;
-            2) 
-                TELEGRAM_DESTINATION="bot"
-                while true; do
-                    read -p "Enter your Chat ID: " TELEGRAM_CHAT_ID
-                    if [[ -n "$TELEGRAM_CHAT_ID" ]]; then
-                        validate_chat_id "$TELEGRAM_CHAT_ID"
-                        break
-                    else
-                        warn "Chat ID cannot be empty"
-                    fi
-                done
-                break 
-                ;;
-            3) 
-                TELEGRAM_DESTINATION="both"
-                while true; do
-                    read -p "Enter Telegram Channel ID: " TELEGRAM_CHANNEL_ID
-                    if [[ -n "$TELEGRAM_CHANNEL_ID" ]]; then
-                        validate_channel_id "$TELEGRAM_CHANNEL_ID"
-                        break
-                    else
-                        warn "Channel ID cannot be empty"
-                    fi
-                done
-                while true; do
-                    read -p "Enter your Chat ID: " TELEGRAM_CHAT_ID
-                    if [[ -n "$TELEGRAM_CHAT_ID" ]]; then
-                        validate_chat_id "$TELEGRAM_CHAT_ID"
-                        break
-                    else
-                        warn "Chat ID cannot be empty"
-                    fi
-                done
-                break 
-                ;;
-            4) 
-                TELEGRAM_DESTINATION="none"
-                break 
-                ;;
-            *) echo "Invalid selection. Please enter 1-4." ;;
-        esac
-    done
 }
 
 # User input function
@@ -288,19 +180,6 @@ get_user_input() {
         break
     done
     
-    # Telegram Bot Token
-    if [[ "$TELEGRAM_DESTINATION" != "none" ]]; then
-        while true; do
-            read -p "Enter Telegram Bot Token: " TELEGRAM_BOT_TOKEN
-            if [[ -n "$TELEGRAM_BOT_TOKEN" ]]; then
-                validate_bot_token "$TELEGRAM_BOT_TOKEN"
-                break
-            else
-                warn "Bot token cannot be empty"
-            fi
-        done
-    fi
-    
     # Host Domain
     read -p "Enter host domain [default: m.googleapis.com]: " HOST_DOMAIN
     HOST_DOMAIN=${HOST_DOMAIN:-"m.googleapis.com"}
@@ -318,19 +197,6 @@ show_config_summary() {
     echo "UUID:        $UUID"
     echo "CPU:         $CPU core(s)"
     echo "Memory:      $MEMORY"
-    
-    if [[ "$TELEGRAM_DESTINATION" != "none" ]]; then
-        echo "Bot Token:   ${TELEGRAM_BOT_TOKEN:0:8}..."
-        echo "Destination: $TELEGRAM_DESTINATION"
-        if [[ "$TELEGRAM_DESTINATION" == "channel" || "$TELEGRAM_DESTINATION" == "both" ]]; then
-            echo "Channel ID:  $TELEGRAM_CHANNEL_ID"
-        fi
-        if [[ "$TELEGRAM_DESTINATION" == "bot" || "$TELEGRAM_DESTINATION" == "both" ]]; then
-            echo "Chat ID:     $TELEGRAM_CHAT_ID"
-        fi
-    else
-        echo "Telegram:    Not configured"
-    fi
     echo
     
     read -p "Proceed with deployment? (y/N) [default: y]: " confirm
@@ -436,40 +302,6 @@ EOF
 }
 EOF
             ;;
-        "vless-grpc")
-            cat > $config_file << EOF
-{
-  "inbounds": [
-    {
-      "port": 8080,
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "id": "$UUID",
-            "level": 0
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "grpc",
-        "security": "none",
-        "grpcSettings": {
-          "serviceName": "vless-grpc-service"
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {}
-    }
-  ]
-}
-EOF
-            ;;
         "vmess")
             cat > $config_file << EOF
 {
@@ -521,14 +353,9 @@ create_dockerfile() {
     cat > Dockerfile << 'EOF'
 FROM v2fly/v2fly-core:latest
 
-RUN apk add --no-cache curl
-
 COPY config.json /etc/v2ray/config.json
 
 EXPOSE 8080
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8080/tg-@iazcc || exit 1
 
 CMD ["v2ray", "run", "-config", "/etc/v2ray/config.json"]
 EOF
@@ -540,75 +367,18 @@ EOF
     log "Created Dockerfile"
 }
 
-send_telegram_message() {
-    local chat_id="$1"
-    local message="$2"
-    
-    # Escape message for JSON
-    message=$(echo "$message" | sed 's/"/\\"/g' | sed 's/\\n/\\\\n/g')
-    
-    local response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-        -H "Content-Type: application/json" \
-        -d '{
-            "chat_id": "'"$chat_id"'",
-            "text": "'"$message"'",
-            "parse_mode": "HTML",
-            "disable_web_page_preview": true
-        }' \
-        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage")
-    
-    if [[ "$response" == "200" ]]; then
-        return 0
-    else
-        return 1
-    fi
+# Create cloudbuild.yaml for better build process
+create_cloudbuild() {
+    cat > cloudbuild.yaml << EOF
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/$SERVICE_NAME', '.']
+images:
+  - 'gcr.io/$PROJECT_ID/$SERVICE_NAME'
+EOF
 }
 
-send_deployment_notification() {
-    local message="$1"
-    local success_count=0
-    
-    case $TELEGRAM_DESTINATION in
-        "channel")
-            if send_telegram_message "$TELEGRAM_CHANNEL_ID" "$message"; then
-                log "✅ Sent to Telegram Channel"
-                success_count=1
-            else
-                warn "❌ Failed to send to Telegram Channel"
-            fi
-            ;;
-        "bot")
-            if send_telegram_message "$TELEGRAM_CHAT_ID" "$message"; then
-                log "✅ Sent to Bot private message"
-                success_count=1
-            else
-                warn "❌ Failed to send to Bot private message"
-            fi
-            ;;
-        "both")
-            if send_telegram_message "$TELEGRAM_CHANNEL_ID" "$message"; then
-                log "✅ Sent to Telegram Channel"
-                success_count=$((success_count + 1))
-            else
-                warn "❌ Failed to send to Telegram Channel"
-            fi
-            if send_telegram_message "$TELEGRAM_CHAT_ID" "$message"; then
-                log "✅ Sent to Bot private message"
-                success_count=$((success_count + 1))
-            else
-                warn "❌ Failed to send to Bot private message"
-            fi
-            ;;
-    esac
-    
-    if [[ $success_count -gt 0 ]]; then
-        log "Telegram notifications completed ($success_count successful)"
-    else
-        warn "All Telegram notifications failed"
-    fi
-}
-
-# Main deployment function
+# Main deployment function - SIMPLIFIED AND FIXED
 main() {
     banner
     
@@ -617,14 +387,12 @@ main() {
     MEMORY="2Gi" 
     REGION="us-central1"
     PROTOCOL="trojan"
-    TELEGRAM_DESTINATION="none"
     
     # Get user input
     select_region
     select_cpu
     select_memory
     select_protocol
-    select_telegram_destination
     get_user_input
     show_config_summary
     
@@ -640,10 +408,8 @@ main() {
     
     # Enable APIs
     log "Enabling required APIs..."
-    gcloud services enable run.googleapis.com cloudbuild.googleapis.com --quiet || {
-        warn "Failed to enable APIs, but continuing..."
-    }
-    
+    gcloud services enable run.googleapis.com cloudbuild.googleapis.com --quiet
+
     # Create temporary directory
     TEMP_DIR=$(mktemp -d)
     cd "$TEMP_DIR"
@@ -652,19 +418,27 @@ main() {
     log "Creating configuration files..."
     create_config
     create_dockerfile
-    
+    create_cloudbuild
+
     # Verify files were created
-    if [[ ! -f "config.json" || ! -f "Dockerfile" ]]; then
+    if [[ ! -f "config.json" || ! -f "Dockerfile" || ! -f "cloudbuild.yaml" ]]; then
         error "Configuration files were not created properly"
     fi
-    
-    # Build container image
-    log "Building container image..."
-    if ! gcloud builds submit --tag "gcr.io/${PROJECT_ID}/${SERVICE_NAME}" --quiet; then
-        error "Build failed. Check Cloud Build logs in GCP console."
+
+    # Show what we're building
+    log "Files in build directory:"
+    ls -la
+
+    # Build container image using Cloud Build
+    log "Building container image using Cloud Build..."
+    if ! gcloud builds submit --config=cloudbuild.yaml . --quiet; then
+        error "Build failed. Please check:"
+        error "1. Cloud Build API is enabled"
+        error "2. You have permissions to build images"
+        error "3. Check Cloud Build logs in GCP Console"
     fi
-    
-    # Deploy to Cloud Run
+
+    # Deploy to Cloud Run with simpler configuration
     log "Deploying to Cloud Run..."
     if ! gcloud run deploy "$SERVICE_NAME" \
         --image "gcr.io/${PROJECT_ID}/${SERVICE_NAME}" \
@@ -675,11 +449,16 @@ main() {
         --memory "$MEMORY" \
         --port=8080 \
         --min-instances=0 \
-        --max-instances=10 \
+        --max-instances=3 \
+        --timeout=300 \
+        --concurrency=80 \
         --quiet; then
-        error "Deployment failed. Check Cloud Run logs in GCP console."
+        error "Deployment failed. Please check:"
+        error "1. Cloud Run API is enabled" 
+        error "2. You have permissions to deploy services"
+        error "3. Check Cloud Run logs in GCP Console"
     fi
-    
+
     # Get service URL
     SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
         --region "$REGION" \
@@ -700,36 +479,14 @@ main() {
         "vless")
             SHARE_LINK="vless://${UUID}@${HOST_DOMAIN}:443?path=%2Ftg-%40iazcc&security=tls&encryption=none&host=${DOMAIN}&type=ws&sni=${DOMAIN}#${SERVICE_NAME}"
             ;;
-        "vless-grpc")
-            SHARE_LINK="vless://${UUID}@${HOST_DOMAIN}:443?mode=gun&security=tls&encryption=none&type=grpc&serviceName=vless-grpc-service&sni=${DOMAIN}#${SERVICE_NAME}"
-            ;;
         "vmess")
-            VMESS_CONFIG='{"v":"2","ps":"'${SERVICE_NAME}'","add":"'${HOST_DOMAIN}'","port":"443","id":"'${UUID}'","aid":"0","net":"ws","type":"none","host":"'${DOMAIN}'","path":"/tg-@iazcc","tls":"tls","sni":"'${DOMAIN}'"}'
+            VMESS_CONFIG="{\"v\":\"2\",\"ps\":\"${SERVICE_NAME}\",\"add\":\"${HOST_DOMAIN}\",\"port\":\"443\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/tg-@iazcc\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"
             SHARE_LINK="vmess://$(echo -n "$VMESS_CONFIG" | base64 -w 0)"
             ;;
     esac
-    
-    # Create messages
-    local MESSAGE="🚀 <b>GCP V2Ray Deployment Successful</b> 🚀
 
-✨ <b>Deployment Details:</b>
-• <b>Project:</b> <code>${PROJECT_ID}</code>
-• <b>Service:</b> <code>${SERVICE_NAME}</code>  
-• <b>Region:</b> <code>${REGION}</code>
-• <b>Protocol:</b> <code>${PROTOCOL^^}</code>
-• <b>Resources:</b> <code>${CPU} CPU | ${MEMORY} RAM</code>
-• <b>Domain:</b> <code>${DOMAIN}</code>
-
-🔗 <b>Configuration Link:</b>
-<code>${SHARE_LINK}</code>
-
-📝 <b>Usage Instructions:</b>
-1. Copy the configuration link
-2. Open your V2Ray client  
-3. Import from clipboard
-4. Connect and enjoy! 🎉"
-
-    local CONSOLE_MESSAGE="🚀 GCP V2Ray Deployment Successful 🚀
+    # Create console message
+    CONSOLE_MESSAGE="🚀 GCP V2Ray Deployment Successful 🚀
 
 ✨ Deployment Details:
 • Project: ${PROJECT_ID}
@@ -747,7 +504,12 @@ ${SHARE_LINK}
 1. Copy the configuration link
 2. Open your V2Ray client  
 3. Import from clipboard
-4. Connect and enjoy! 🎉"
+4. Connect and enjoy! 🎉
+
+💡 Important Notes:
+• Service may take 1-2 minutes to become fully active
+• Cold start might take 10-30 seconds for first connection
+• Monitor usage in Google Cloud Console"
 
     # Display info
     echo
@@ -756,14 +518,8 @@ ${SHARE_LINK}
     echo
     
     # Save to file
-    INFO_FILE="${SERVICE_NAME}-deployment-info.txt"
+    INFO_FILE="/tmp/${SERVICE_NAME}-deployment-info.txt"
     echo "$CONSOLE_MESSAGE" > "$INFO_FILE"
-    
-    # Send Telegram notification
-    if [[ "$TELEGRAM_DESTINATION" != "none" ]]; then
-        log "Sending Telegram notification..."
-        send_deployment_notification "$MESSAGE"
-    fi
     
     success "🎉 Deployment completed successfully!"
     log "📝 Service URL: $SERVICE_URL"
@@ -773,6 +529,13 @@ ${SHARE_LINK}
     cd /
     rm -rf "$TEMP_DIR"
     log "Cleaned up temporary files"
+
+    # Additional helpful commands
+    echo
+    info "Useful commands for management:"
+    echo "View logs: gcloud run logs read $SERVICE_NAME --region=$REGION"
+    echo "Delete service: gcloud run services delete $SERVICE_NAME --region=$REGION"
+    echo "List services: gcloud run services list --region=$REGION"
 }
 
 # Run main function
