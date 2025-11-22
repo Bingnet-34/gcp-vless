@@ -1,4 +1,3 @@
-cat > deploy-v2ray.sh << 'ENDOFFILE'
 #!/bin/bash
 
 set -euo pipefail
@@ -85,13 +84,11 @@ validate_chat_id() {
     return 0
 }
 
-# Function to validate URL format
+# Function to validate URL format - CORRECTED
 validate_url() {
     local url="$1"
-    local url_pattern='^https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(/[a-zA-Z0-9._~:/?#[\]@!$&'"'"'()*+,;=-]*)?$'
-    local telegram_pattern='^https?://t\.me/[a-zA-Z0-9_]+$'
-    
-    if [[ "$url" =~ $telegram_pattern ]] || [[ "$url" =~ $url_pattern ]]; then
+    # More flexible URL validation
+    if [[ "$url" =~ ^https?://[a-zA-Z0-9./?=_-]+$ ]] || [[ "$url" =~ ^https?://t\.me/[a-zA-Z0-9_]+$ ]]; then
         return 0
     else
         error "Invalid URL format: $url"
@@ -111,7 +108,7 @@ select_cpu() {
     
     while true; do
         read -p "Select CPU cores (1-4): " cpu_choice
-        case $cpu_choice in
+        case ${cpu_choice:-1} in
             1) CPU="1"; break ;;
             2) CPU="2"; break ;;
             3) CPU="4"; break ;;
@@ -123,7 +120,7 @@ select_cpu() {
     info "Selected CPU: $CPU core(s)"
 }
 
-# Memory selection function
+# Memory selection function - CORRECTED
 select_memory() {
     echo
     info "=== Memory Configuration ==="
@@ -147,7 +144,7 @@ select_memory() {
     
     while true; do
         read -p "Select memory (1-6): " memory_choice
-        case $memory_choice in
+        case ${memory_choice:-3} in
             1) MEMORY="512Mi"; break ;;
             2) MEMORY="1Gi"; break ;;
             3) MEMORY="2Gi"; break ;;
@@ -158,48 +155,10 @@ select_memory() {
         esac
     done
     
-    validate_memory_config
     info "Selected Memory: $MEMORY"
 }
 
-# Validate memory configuration based on CPU
-validate_memory_config() {
-    local cpu_num=$CPU
-    local memory_num=$(echo $MEMORY | sed 's/[^0-9]*//g')
-    local memory_unit=$(echo $MEMORY | sed 's/[0-9]*//g')
-    
-    if [[ "$memory_unit" == "Gi" ]]; then
-        memory_num=$((memory_num * 1024))
-    fi
-    
-    local min_memory=0
-    local max_memory=0
-    
-    case $cpu_num in
-        1) min_memory=512; max_memory=2048 ;;
-        2) min_memory=1024; max_memory=4096 ;;
-        4) min_memory=2048; max_memory=8192 ;;
-        8) min_memory=4096; max_memory=16384 ;;
-    esac
-    
-    if [[ $memory_num -lt $min_memory ]]; then
-        warn "Memory configuration ($MEMORY) might be too low for $CPU CPU core(s)."
-        warn "Recommended minimum: $((min_memory / 1024))Gi"
-        read -p "Do you want to continue with this configuration? (y/n): " confirm
-        if [[ ! $confirm =~ [Yy] ]]; then
-            select_memory
-        fi
-    elif [[ $memory_num -gt $max_memory ]]; then
-        warn "Memory configuration ($MEMORY) might be too high for $CPU CPU core(s)."
-        warn "Recommended maximum: $((max_memory / 1024))Gi"
-        read -p "Do you want to continue with this configuration? (y/n): " confirm
-        if [[ ! $confirm =~ [Yy] ]]; then
-            select_memory
-        fi
-    fi
-}
-
-# Region selection function
+# Region selection function - CORRECTED
 select_region() {
     echo
     info "=== Region Selection ==="
@@ -215,7 +174,7 @@ select_region() {
     
     while true; do
         read -p "Select region (1-8): " region_choice
-        case $region_choice in
+        case ${region_choice:-1} in
             1) REGION="us-central1"; break ;;
             2) REGION="us-west1"; break ;;
             3) REGION="us-east1"; break ;;
@@ -231,7 +190,7 @@ select_region() {
     info "Selected region: $REGION"
 }
 
-# Protocol selection function
+# Protocol selection function - CORRECTED
 select_protocol() {
     echo
     info "=== Protocol Selection ==="
@@ -243,7 +202,7 @@ select_protocol() {
     
     while true; do
         read -p "Select protocol (1-4): " protocol_choice
-        case $protocol_choice in
+        case ${protocol_choice:-1} in
             1) PROTOCOL="trojan-ws"; break ;;
             2) PROTOCOL="vless-ws"; break ;;
             3) PROTOCOL="vless-grpc"; break ;;
@@ -255,7 +214,7 @@ select_protocol() {
     info "Selected protocol: $PROTOCOL"
 }
 
-# Telegram destination selection
+# Telegram destination selection - CORRECTED
 select_telegram_destination() {
     echo
     info "=== Telegram Destination ==="
@@ -267,13 +226,15 @@ select_telegram_destination() {
     
     while true; do
         read -p "Select destination (1-4): " telegram_choice
-        case $telegram_choice in
+        case ${telegram_choice:-4} in
             1) 
                 TELEGRAM_DESTINATION="channel"
                 while true; do
                     read -p "Enter Telegram Channel ID: " TELEGRAM_CHANNEL_ID
-                    if validate_channel_id "$TELEGRAM_CHANNEL_ID"; then
+                    if [[ -n "$TELEGRAM_CHANNEL_ID" ]] && validate_channel_id "$TELEGRAM_CHANNEL_ID"; then
                         break
+                    elif [[ -z "$TELEGRAM_CHANNEL_ID" ]]; then
+                        warn "Channel ID cannot be empty"
                     fi
                 done
                 break 
@@ -282,8 +243,10 @@ select_telegram_destination() {
                 TELEGRAM_DESTINATION="bot"
                 while true; do
                     read -p "Enter your Chat ID (for bot private message): " TELEGRAM_CHAT_ID
-                    if validate_chat_id "$TELEGRAM_CHAT_ID"; then
+                    if [[ -n "$TELEGRAM_CHAT_ID" ]] && validate_chat_id "$TELEGRAM_CHAT_ID"; then
                         break
+                    elif [[ -z "$TELEGRAM_CHAT_ID" ]]; then
+                        warn "Chat ID cannot be empty"
                     fi
                 done
                 break 
@@ -292,14 +255,18 @@ select_telegram_destination() {
                 TELEGRAM_DESTINATION="both"
                 while true; do
                     read -p "Enter Telegram Channel ID: " TELEGRAM_CHANNEL_ID
-                    if validate_channel_id "$TELEGRAM_CHANNEL_ID"; then
+                    if [[ -n "$TELEGRAM_CHANNEL_ID" ]] && validate_channel_id "$TELEGRAM_CHANNEL_ID"; then
                         break
+                    elif [[ -z "$TELEGRAM_CHANNEL_ID" ]]; then
+                        warn "Channel ID cannot be empty"
                     fi
                 done
                 while true; do
                     read -p "Enter your Chat ID (for bot private message): " TELEGRAM_CHAT_ID
-                    if validate_chat_id "$TELEGRAM_CHAT_ID"; then
+                    if [[ -n "$TELEGRAM_CHAT_ID" ]] && validate_chat_id "$TELEGRAM_CHAT_ID"; then
                         break
+                    elif [[ -z "$TELEGRAM_CHAT_ID" ]]; then
+                        warn "Chat ID cannot be empty"
                     fi
                 done
                 break 
@@ -313,7 +280,7 @@ select_telegram_destination() {
     done
 }
 
-# Channel URL input function
+# Channel URL input function - CORRECTED
 get_channel_url() {
     echo
     info "=== Channel URL Configuration ==="
@@ -354,16 +321,22 @@ get_channel_url() {
     info "Channel Name: $CHANNEL_NAME"
 }
 
-# User input function
+# User input function - CORRECTED
 get_user_input() {
     echo
     info "=== Service Configuration ==="
     
     # Service Name
     while true; do
-        read -p "Enter service name: " SERVICE_NAME
+        read -p "Enter service name [default: v2ray-service]: " SERVICE_NAME
+        SERVICE_NAME=${SERVICE_NAME:-"v2ray-service"}
         if [[ -n "$SERVICE_NAME" ]]; then
-            break
+            # Validate service name (alphanumeric and hyphens only)
+            if [[ "$SERVICE_NAME" =~ ^[a-z0-9-]+$ ]]; then
+                break
+            else
+                error "Service name can only contain lowercase letters, numbers, and hyphens"
+            fi
         else
             error "Service name cannot be empty"
         fi
@@ -371,7 +344,7 @@ get_user_input() {
     
     # UUID
     while true; do
-        read -p "Enter UUID: " UUID
+        read -p "Enter UUID [default: ba0e3984-ccc9-48a3-8074-b2f507f41ce8]: " UUID
         UUID=${UUID:-"ba0e3984-ccc9-48a3-8074-b2f507f41ce8"}
         if validate_uuid "$UUID"; then
             break
@@ -382,8 +355,10 @@ get_user_input() {
     if [[ "$TELEGRAM_DESTINATION" != "none" ]]; then
         while true; do
             read -p "Enter Telegram Bot Token: " TELEGRAM_BOT_TOKEN
-            if validate_bot_token "$TELEGRAM_BOT_TOKEN"; then
+            if [[ -n "$TELEGRAM_BOT_TOKEN" ]] && validate_bot_token "$TELEGRAM_BOT_TOKEN"; then
                 break
+            elif [[ -z "$TELEGRAM_BOT_TOKEN" ]]; then
+                warn "Bot token cannot be empty for Telegram notifications"
             fi
         done
     fi
@@ -398,11 +373,11 @@ get_user_input() {
     fi
 }
 
-# Display configuration summary
+# Display configuration summary - CORRECTED
 show_config_summary() {
     echo
     success "=== Configuration Summary ==="
-    echo "Project ID:    $(gcloud config get-value project)"
+    echo "Project ID:    $(gcloud config get-value project 2>/dev/null || echo 'Not set')"
     echo "Region:        $REGION"
     echo "Protocol:      $PROTOCOL"
     echo "Service Name:  $SERVICE_NAME"
@@ -429,7 +404,7 @@ show_config_summary() {
     
     while true; do
         read -p "Proceed with deployment? (y/n): " confirm
-        case $confirm in
+        case ${confirm:-n} in
             [Yy]* ) break;;
             [Nn]* ) 
                 info "Deployment cancelled by user"
@@ -440,7 +415,7 @@ show_config_summary() {
     done
 }
 
-# Validation functions
+# Validation functions - CORRECTED
 validate_prerequisites() {
     log "Validating prerequisites..."
     
@@ -449,14 +424,15 @@ validate_prerequisites() {
         exit 1
     fi
     
-    if ! command -v git &> /dev/null; then
-        error "git is not installed. Please install git."
+    local PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+    if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "(unset)" ]]; then
+        error "No project configured. Run: gcloud config set project PROJECT_ID"
         exit 1
     fi
     
-    local PROJECT_ID=$(gcloud config get-value project)
-    if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "(unset)" ]]; then
-        error "No project configured. Run: gcloud config set project PROJECT_ID"
+    # Check if user is authenticated
+    if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" &>/dev/null; then
+        error "Not authenticated. Run: gcloud auth login"
         exit 1
     fi
 }
@@ -473,37 +449,29 @@ send_to_telegram() {
     local message="$2"
     local response
     
-    # Create inline keyboard with dynamic button
-    local keyboard=$(cat << EOF
+    # Create inline keyboard with dynamic button - CORRECTED
+    local keyboard='{"inline_keyboard":[[{"text":"'"$CHANNEL_NAME"'","url":"'"$CHANNEL_URL"'"}]]}'
+    
+    response=$(curl -s -w "%{http_code}" -X POST \
+        -H "Content-Type: application/json" \
+        -d @- \
+        https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage << EOF
 {
-    "inline_keyboard": [[
-        {
-            "text": "$CHANNEL_NAME",
-            "url": "$CHANNEL_URL"
-        }
-    ]]
+    "chat_id": "${chat_id}",
+    "text": "$message",
+    "parse_mode": "MARKDOWN",
+    "disable_web_page_preview": true,
+    "reply_markup": $keyboard
 }
 EOF
 )
     
-    response=$(curl -s -w "%{http_code}" -X POST \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"chat_id\": \"${chat_id}\",
-            \"text\": \"$message\",
-            \"parse_mode\": \"MARKDOWN\",
-            \"disable_web_page_preview\": true,
-            \"reply_markup\": $keyboard
-        }" \
-        https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage)
-    
     local http_code="${response: -3}"
-    local content="${response%???}"
     
     if [[ "$http_code" == "200" ]]; then
         return 0
     else
-        error "Failed to send to Telegram (HTTP $http_code): $content"
+        error "Failed to send to Telegram (HTTP $http_code)"
         return 1
     fi
 }
@@ -566,28 +534,7 @@ send_deployment_notification() {
     fi
 }
 
-# Get appropriate Docker image based on protocol
-get_docker_image() {
-    case $PROTOCOL in
-        "trojan-ws")
-            echo "docker.io/nkka404/trojan-ws:latest"
-            ;;
-        "vless-ws")
-            echo "docker.io/nkka404/vless-ws:latest"
-            ;;
-        "vless-grpc")
-            echo "docker.io/nkka404/vless-grpc:latest"
-            ;;
-        "vmess-ws")
-            echo "docker.io/n4pro/vmess:latest"
-            ;;
-        *)
-            echo "docker.io/nkka404/trojan-ws:latest"
-            ;;
-    esac
-}
-
-# Create appropriate configuration based on protocol
+# Create appropriate configuration based on protocol - CORRECTED
 create_config() {
     local config_file="config.json"
     
@@ -751,8 +698,16 @@ CMD ["v2ray", "run", "-config", "/etc/v2ray/config.json"]
 EOF
 }
 
+# Main deployment function - CORRECTED
 main() {
     banner
+    
+    # Set default values
+    CPU="1"
+    MEMORY="2Gi"
+    REGION="us-central1"
+    PROTOCOL="trojan-ws"
+    TELEGRAM_DESTINATION="none"
     
     # Get user input
     select_region
@@ -779,11 +734,14 @@ main() {
     trap cleanup EXIT
     
     log "Enabling required APIs..."
-    gcloud services enable \
+    if ! gcloud services enable \
         cloudbuild.googleapis.com \
         run.googleapis.com \
         iam.googleapis.com \
-        --quiet
+        --quiet; then
+        error "Failed to enable required APIs"
+        exit 1
+    fi
     
     # Clean up any existing directory
     cleanup
@@ -824,7 +782,7 @@ main() {
     
     DOMAIN=$(echo $SERVICE_URL | sed 's|https://||')
     
-    # Create share link based on protocol
+    # Create share link based on protocol - CORRECTED
     case $PROTOCOL in
         "trojan-ws")
             SHARE_LINK="trojan://Trojan-2025@${HOST_DOMAIN}:443?path=%2Ftg-%40iazcc&security=tls&alpn=h3%2Ch2%2Chttp%2F1.1&host=${DOMAIN}&fp=randomized&type=ws&sni=${DOMAIN}#${SERVICE_NAME}"
@@ -836,31 +794,12 @@ main() {
             SHARE_LINK="vless://${UUID}@${HOST_DOMAIN}:443?mode=gun&security=tls&encryption=none&type=grpc&serviceName=vless-grpc-service&sni=${DOMAIN}#${SERVICE_NAME}"
             ;;
         "vmess-ws")
-            VMESS_CONFIG=$(cat << EOF
-{
-  "v": "2",
-  "ps": "${SERVICE_NAME}",
-  "add": "${HOST_DOMAIN}",
-  "port": "443",
-  "id": "${UUID}",
-  "aid": "0",
-  "scy": "auto",
-  "net": "ws",
-  "type": "none",
-  "host": "${DOMAIN}",
-  "path": "/tg-@iazcc",
-  "tls": "tls",
-  "sni": "${DOMAIN}",
-  "alpn": "h3,h2,http/1.1",
-  "fp": "randomized"
-}
-EOF
-)
-            SHARE_LINK="vmess://$(echo "$VMESS_CONFIG" | base64 -w 0)"
+            VMESS_CONFIG='{"v":"2","ps":"'${SERVICE_NAME}'","add":"'${HOST_DOMAIN}'","port":"443","id":"'${UUID}'","aid":"0","scy":"auto","net":"ws","type":"none","host":"'${DOMAIN}'","path":"/tg-@iazcc","tls":"tls","sni":"'${DOMAIN}'","alpn":"h3,h2,http/1.1","fp":"randomized"}'
+            SHARE_LINK="vmess://$(echo -n "$VMESS_CONFIG" | base64 -w 0)"
             ;;
     esac
     
-    # Create beautiful telegram message with emojis
+    # Create beautiful telegram message with emojis - CORRECTED
     MESSAGE="🚀 *GCP V2Ray Deployment Successful* 🚀
 ━━━━━━━━━━━━━━━━━━━━
 ✨ *Deployment Details:*
@@ -930,7 +869,3 @@ ${SHARE_LINK}
 
 # Run main function
 main "$@"
-ENDOFFILE
-
-chmod +x deploy-v2ray.sh
-./deploy-v2ray.sh
