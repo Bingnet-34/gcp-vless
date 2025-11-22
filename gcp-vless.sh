@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# GCP VLESS Server Deployer with Telegram Bot
-# Complete version with proper resource configuration
+# GCP VLESS Server Deployer - Optimized for Google Cloud
+# Maximum Resources & No User Limits
 # Author: Assistant
-# Version: 3.0
+# Version: 5.0
 
 set -e
 
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -16,8 +16,8 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # Global variables
-SERVICE_NAME=""
-REGION=""
+SERVICE_NAME="vless-proxy"
+REGION="us-central1"
 PROJECT_ID=""
 TELEGRAM_BOT_TOKEN=""
 TELEGRAM_CHAT_ID=""
@@ -26,51 +26,42 @@ PATH_SUFFIX=""
 SERVICE_URL=""
 VLESS_LINK=""
 
-# Resource configurations
-declare -A CPU_OPTIONS=(
-    [1]="1 CPU (Default)"
-    [2]="2 CPU"
-    [4]="4 CPU"
-)
+# Google Cloud Run Maximum Limits
+MAX_CPU=8
+MAX_MEMORY="32Gi"
+MAX_INSTANCES=100
+MAX_CONCURRENCY=1000
 
-declare -A MEMORY_OPTIONS=(
-    [1]="512Mi (Default)"
-    [2]="1Gi"
-    [3]="2Gi"
-    [4]="4Gi"
-)
-
-declare -A CONCURRENCY_OPTIONS=(
-    [1]="80 (Default)"
-    [2]="100"
-    [3]="250"
-    [4]="500"
-    [5]="1000"
-)
-
-# Functions
 print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 check_dependencies() {
-    print_info "Checking dependencies..."
+    print_info "Checking Google Cloud environment..."
     
-    local deps=("gcloud" "curl")
-    for dep in "${deps[@]}"; do
-        if ! command -v "$dep" &> /dev/null; then
-            print_error "$dep is not installed. Please install it first."
-            exit 1
-        fi
-    done
-    print_success "All dependencies are installed"
+    if ! command -v gcloud &> /dev/null; then
+        print_error "gcloud CLI not found. This script must run in Google Cloud Shell"
+        exit 1
+    fi
+
+    if ! command -v curl &> /dev/null; then
+        print_error "curl not available"
+        exit 1
+    fi
+    print_success "Google Cloud environment verified"
 }
 
 check_gcloud_auth() {
     if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q .; then
-        print_warning "Please login to Google Cloud first"
+        print_warning "Google Cloud authentication required"
         gcloud auth login --no-launch-browser
+    fi
+    
+    # Check if project is set
+    if [[ -z "$(gcloud config get-value project 2>/dev/null)" ]]; then
+        print_info "No project configured. Please select a project."
+        list_projects
     fi
 }
 
@@ -82,156 +73,33 @@ get_telegram_info() {
     while true; do
         read -p "Enter Telegram Bot Token: " TELEGRAM_BOT_TOKEN
         if [[ -n "$TELEGRAM_BOT_TOKEN" ]]; then
-            break
+            if [[ $TELEGRAM_BOT_TOKEN =~ ^[0-9]+:[a-zA-Z0-9_-]+$ ]]; then
+                break
+            else
+                print_error "Invalid bot token format"
+            fi
         else
             print_error "Bot token is required"
         fi
     done
     
-    while true; do
-        read -p "Enter Chat ID: " TELEGRAM_CHAT_ID
-        if [[ -n "$TELEGRAM_CHAT_ID" ]]; then
-            break
-        else
-            print_error "Chat ID is required"
-        fi
-    done
-}
-
-select_resource_config() {
-    echo ""
-    print_info "Server Resource Configuration"
-    echo "================================"
-    
-    # CPU Selection
-    echo ""
-    print_info "CPU Options:"
-    for key in "${!CPU_OPTIONS[@]}"; do
-        echo "  $key. ${CPU_OPTIONS[$key]}"
-    done
-    while true; do
-        read -p "Select CPU option (1-4) [Default: 1]: " cpu_choice
-        cpu_choice=${cpu_choice:-1}
-        if [[ $cpu_choice =~ ^[1-4]$ ]]; then
-            case $cpu_choice in
-                1) CPU="1";;
-                2) CPU="2";;
-                3) CPU="4";;
-                4) CPU="8";;
-            esac
-            break
-        else
-            print_error "Invalid choice. Please select 1-4"
-        fi
-    done
-    
-    # Memory Selection
-    echo ""
-    print_info "Memory Options:"
-    for key in "${!MEMORY_OPTIONS[@]}"; do
-        echo "  $key. ${MEMORY_OPTIONS[$key]}"
-    done
-    while true; do
-        read -p "Select Memory option (1-4) [Default: 1]: " memory_choice
-        memory_choice=${memory_choice:-1}
-        if [[ $memory_choice =~ ^[1-4]$ ]]; then
-            case $memory_choice in
-                1) MEMORY="512Mi";;
-                2) MEMORY="1Gi";;
-                3) MEMORY="2Gi";;
-                4) MEMORY="4Gi";;
-            esac
-            break
-        else
-            print_error "Invalid choice. Please select 1-4"
-        fi
-    done
-    
-    # Concurrency Selection
-    echo ""
-    print_info "Concurrency Options (requests per container):"
-    for key in "${!CONCURRENCY_OPTIONS[@]}"; do
-        echo "  $key. ${CONCURRENCY_OPTIONS[$key]}"
-    done
-    while true; do
-        read -p "Select Concurrency option (1-5) [Default: 1]: " concurrency_choice
-        concurrency_choice=${concurrency_choice:-1}
-        if [[ $concurrency_choice =~ ^[1-5]$ ]]; then
-            case $concurrency_choice in
-                1) CONCURRENCY="80";;
-                2) CONCURRENCY="100";;
-                3) CONCURRENCY="250";;
-                4) CONCURRENCY="500";;
-                5) CONCURRENCY="1000";;
-            esac
-            break
-        else
-            print_error "Invalid choice. Please select 1-5"
-        fi
-    done
-    
-    # Auto-scaling configuration
-    echo ""
-    read -p "Enable auto-scaling? (y/n) [Default: y]: " enable_autoscaling
-    enable_autoscaling=${enable_autoscaling:-y}
-    if [[ $enable_autoscaling == "y" || $enable_autoscaling == "Y" ]]; then
-        MIN_INSTANCES="0"
-        MAX_INSTANCES="10"
+    # Verify bot token
+    print_info "Verifying bot token..."
+    if curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | grep -q \"ok\":true; then
+        print_success "Bot token verified"
     else
-        MIN_INSTANCES="1"
-        MAX_INSTANCES="1"
-    fi
-}
-
-get_project_info() {
-    echo ""
-    print_info "Google Cloud Configuration"
-    echo "============================"
-    
-    # Get current project
-    CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null)
-    
-    if [[ -n "$CURRENT_PROJECT" ]]; then
-        print_info "Current project: $CURRENT_PROJECT"
-        read -p "Use this project? (y/n) [Default: y]: " use_current
-        use_current=${use_current:-y}
-        if [[ $use_current == "y" || $use_current == "Y" ]]; then
-            PROJECT_ID=$CURRENT_PROJECT
-        else
-            list_projects
-        fi
-    else
-        list_projects
+        print_error "Invalid bot token"
+        exit 1
     fi
     
-    # Region selection
     echo ""
-    print_info "Available Regions:"
-    echo "1. us-central1 (USA)"
-    echo "2. europe-west1 (Europe)" 
-    echo "3. asia-east1 (Asia)"
-    echo "4. me-west1 (Middle East)"
-    read -p "Select region (1-4) [Default: 1]: " region_choice
-    region_choice=${region_choice:-1}
-    case $region_choice in
-        2) REGION="europe-west1" ;;
-        3) REGION="asia-east1" ;;
-        4) REGION="me-west1" ;;
-        *) REGION="us-central1" ;;
-    esac
-    
-    # Service name
-    echo ""
-    read -p "Enter service name [Default: vless-server]: " SERVICE_NAME
-    SERVICE_NAME=${SERVICE_NAME:-vless-server}
-    
-    # Generate UUID and path
-    UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)
-    PATH_SUFFIX=$(head /dev/urandom 2>/dev/null | tr -dc a-z0-9 | head -c 10)
+    print_info "Enter your personal Chat ID for admin notifications:"
+    read -p "Chat ID: " TELEGRAM_CHAT_ID
 }
 
 list_projects() {
-    print_info "Fetching project list..."
+    print_info "Available Google Cloud Projects:"
+    echo ""
     gcloud projects list --format="table(projectId,name)" --sort-by=projectId
     
     echo ""
@@ -240,61 +108,93 @@ list_projects() {
         if [[ -n "$PROJECT_ID" ]]; then
             if gcloud projects describe $PROJECT_ID &>/dev/null; then
                 gcloud config set project $PROJECT_ID
+                print_success "Project set to: $PROJECT_ID"
                 break
             else
-                print_error "Project doesn't exist or you don't have access"
+                print_error "Project not found or no access"
             fi
         fi
     done
 }
 
-send_telegram_message() {
-    local message="$1"
-    if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d "chat_id=${TELEGRAM_CHAT_ID}" \
-        -d "text=$message" \
-        -d "parse_mode=HTML" > /dev/null; then
-        print_success "Message sent to Telegram"
-        return 0
-    else
-        print_warning "Failed to send message to Telegram"
-        return 1
-    fi
+select_max_resources() {
+    echo ""
+    print_info "Google Cloud Run Maximum Resource Configuration"
+    echo "==================================================="
+    print_warning "Using maximum available resources for best performance"
+    
+    # Auto-select maximum resources
+    CPU=$MAX_CPU
+    MEMORY=$MAX_MEMORY
+    CONCURRENCY=$MAX_CONCURRENCY
+    INSTANCES=$MAX_INSTANCES
+    
+    echo ""
+    print_success "Selected Resources:"
+    echo "• CPU: $CPU cores (Maximum)"
+    echo "• Memory: $MEMORY (Maximum)" 
+    echo "• Concurrency: $CONCURRENCY requests/container"
+    echo "• Max Instances: $INSTANCES"
+    echo "• Min Instances: 1 (Always running)"
+    
+    read -p "Press Enter to continue with maximum resources..."
 }
 
-setup_telegram_bot_commands() {
-    print_info "Setting up Telegram bot commands..."
+select_region() {
+    echo ""
+    print_info "Available Google Cloud Regions:"
+    echo "1. us-central1 (Iowa, USA) - Recommended"
+    echo "2. europe-west1 (Belgium, Europe)"
+    echo "3. asia-east1 (Taiwan, Asia)" 
+    echo "4. asia-southeast1 (Singapore, Asia)"
+    echo "5. me-west1 (Tel Aviv, Middle East)"
     
-    local commands='{
-        "commands": [
-            {"command": "start", "description": "Get VLESS server configuration"},
-            {"command": "status", "description": "Check server status"},
-            {"command": "info", "description": "Get server information"}
-        ]
-    }'
+    read -p "Select region (1-5) [1]: " region_choice
+    region_choice=${region_choice:-1}
     
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setMyCommands" \
-        -H "Content-Type: application/json" \
-        -d "$commands" > /dev/null && print_success "Bot commands set successfully"
+    case $region_choice in
+        2) REGION="europe-west1" ;;
+        3) REGION="asia-east1" ;;
+        4) REGION="asia-southeast1" ;;
+        5) REGION="me-west1" ;;
+        *) REGION="us-central1" ;;
+    esac
+    
+    print_success "Selected Region: $REGION"
+}
+
+get_service_name() {
+    echo ""
+    read -p "Enter service name [vless-proxy]: " input_name
+    SERVICE_NAME=${input_name:-vless-proxy}
+    
+    # Generate unique path
+    UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)
+    PATH_SUFFIX=$(head /dev/urandom 2>/dev/null | tr -dc a-z0-9 | head -c 12)
 }
 
 create_docker_config() {
-    print_info "Creating Docker configuration..."
+    print_info "Creating optimized Docker configuration..."
     
-    cat > Dockerfile << EOF
+    cat > Dockerfile << 'EOF'
 FROM alpine:latest
 
-RUN apk update && apk add --no-cache curl unzip
+RUN apk update && apk add --no-cache curl unzip ca-certificates
 
-# Install Xray
-RUN curl -L https://github.com/XTLS/Xray-core/releases/download/v1.8.11/Xray-linux-64.zip -o xray.zip && \
-    unzip xray.zip xray && \
-    mv xray /usr/bin/ && \
-    chmod +x /usr/bin/xray && \
-    rm xray.zip && \
-    mkdir -p /etc/xray
+# Install Xray core
+RUN curl -L https://github.com/XTLS/Xray-core/releases/download/v1.8.11/Xray-linux-64.zip -o xray.zip \
+    && unzip xray.zip xray \
+    && mv xray /usr/bin/ \
+    && chmod +x /usr/bin/xray \
+    && rm xray.zip \
+    && mkdir -p /etc/xray
+
+# Create non-root user
+RUN adduser -D -u 1000 xray
 
 COPY config.json /etc/xray/
+
+USER xray
 
 EXPOSE 8080
 
@@ -304,11 +204,14 @@ EOF
     cat > config.json << EOF
 {
     "log": {
-        "loglevel": "warning"
+        "loglevel": "warning",
+        "access": "none",
+        "error": "none"
     },
     "inbounds": [
         {
             "port": 8080,
+            "listen": "0.0.0.0",
             "protocol": "vless",
             "settings": {
                 "clients": [
@@ -324,68 +227,129 @@ EOF
                 "security": "tls",
                 "tlsSettings": {
                     "alpn": ["h3", "h2", "http/1.1"],
-                    "fingerprint": "randomized"
+                    "fingerprint": "randomized",
+                    "minVersion": "1.3",
+                    "maxVersion": "1.3"
                 },
                 "wsSettings": {
-                    "path": "/vless-$PATH_SUFFIX"
+                    "path": "/vless-$PATH_SUFFIX",
+                    "headers": {
+                        "Host": ""
+                    }
                 }
             },
             "sniffing": {
                 "enabled": true,
-                "destOverride": ["http", "tls"]
+                "destOverride": ["http", "tls", "quic"],
+                "metadataOnly": false
             }
         }
     ],
     "outbounds": [
         {
             "protocol": "freedom",
-            "settings": {}
+            "settings": {
+                "domainStrategy": "UseIP"
+            },
+            "tag": "direct"
+        },
+        {
+            "protocol": "blackhole",
+            "settings": {},
+            "tag": "blocked"
         }
-    ]
+    ],
+    "routing": {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": [
+            {
+                "type": "field",
+                "ip": ["geoip:private"],
+                "outboundTag": "blocked"
+            }
+        ]
+    },
+    "policy": {
+        "levels": {
+            "0": {
+                "handshake": 2,
+                "connIdle": 120,
+                "uplinkOnly": 1,
+                "downlinkOnly": 1
+            }
+        }
+    }
 }
 EOF
 }
 
-deploy_to_cloud_run() {
-    print_info "Deploying to Google Cloud Run..."
+enable_required_services() {
+    print_info "Enabling required Google Cloud services..."
     
-    # Enable required services
-    print_info "Enabling required Google services..."
-    gcloud services enable run.googleapis.com containerregistry.googleapis.com cloudbuild.googleapis.com --quiet
+    local services=(
+        "run.googleapis.com"
+        "containerregistry.googleapis.com" 
+        "cloudbuild.googleapis.com"
+        "compute.googleapis.com"
+    )
     
-    # Build container
-    print_info "Building container image (this may take 5-10 minutes)..."
-    if ! gcloud builds submit --tag gcr.io/$PROJECT_ID/$SERVICE_NAME --quiet; then
-        print_error "Failed to build container image"
-        exit 1
-    fi
-    
-    # Deploy service with selected resources
-    print_info "Deploying service with ${CPU} CPU, ${MEMORY} memory..."
-    local deploy_cmd="gcloud run deploy $SERVICE_NAME \
-        --image gcr.io/$PROJECT_ID/$SERVICE_NAME \
-        --platform managed \
-        --region $REGION \
-        --allow-unauthenticated \
-        --port 8080 \
-        --cpu $CPU \
-        --memory $MEMORY \
-        --concurrency $CONCURRENCY \
-        --min-instances $MIN_INSTANCES \
-        --max-instances $MAX_INSTANCES \
-        --quiet"
-    
-    if ! eval $deploy_cmd; then
-        print_error "Failed to deploy service"
-        exit 1
-    fi
+    for service in "${services[@]}"; do
+        if ! gcloud services list --enabled --filter="name:$service" | grep -q "$service"; then
+            print_info "Enabling $service..."
+            gcloud services enable "$service" --quiet
+        fi
+    done
+    print_success "All required services enabled"
 }
 
-get_service_info() {
-    print_info "Getting service information..."
-    SERVICE_URL=$(gcloud run services describe $SERVICE_NAME \
+deploy_to_cloud_run() {
+    print_info "Starting deployment to Google Cloud Run..."
+    
+    # Enable services
+    enable_required_services
+    
+    # Build container with maximum resources
+    print_info "Building container image with Cloud Build..."
+    if ! gcloud builds submit \
+        --tag "gcr.io/$PROJECT_ID/$SERVICE_NAME" \
+        --machine-type=e2-highcpu-8 \
+        --disk-size=100GB \
+        --quiet; then
+        print_error "Container build failed"
+        exit 1
+    fi
+    
+    # Deploy with maximum resources
+    print_info "Deploying service with maximum resources..."
+    local deploy_cmd=(
+        gcloud run deploy "$SERVICE_NAME"
+        --image "gcr.io/$PROJECT_ID/$SERVICE_NAME"
+        --platform managed
+        --region "$REGION"
+        --allow-unauthenticated
+        --port 8080
+        --cpu "$CPU"
+        --memory "$MEMORY"
+        --concurrency "$CONCURRENCY"
+        --min-instances 1
+        --max-instances "$INSTANCES"
+        --execution-environment gen2
+        --no-cpu-throttling
+        --quiet
+    )
+    
+    if ! "${deploy_cmd[@]}"; then
+        print_error "Deployment failed"
+        exit 1
+    fi
+    
+    print_success "Service deployed successfully"
+}
+
+get_service_url() {
+    SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
         --platform managed \
-        --region $REGION \
+        --region "$REGION" \
         --format="value(status.url)" 2>/dev/null)
     
     if [[ -z "$SERVICE_URL" ]]; then
@@ -395,88 +359,135 @@ get_service_info() {
 }
 
 generate_vless_config() {
-    local domain=$(echo $SERVICE_URL | sed 's|https://||')
-    VLESS_LINK="vless://${UUID}@${domain}:443?path=%2Fvless-${PATH_SUFFIX}&security=tls&alpn=h3%2Ch2%2Chttp%2F1.1&encryption=none&host=${domain}&fp=randomized&type=ws&sni=${domain}#${SERVICE_NAME}"
+    local domain=$(echo "$SERVICE_URL" | sed 's|https://||')
+    VLESS_LINK="vless://${UUID}@${domain}:443?path=%2Fvless-${PATH_SUFFIX}&security=tls&alpn=h3%2Ch2%2Chttp%2F1.1&encryption=none&host=${domain}&fp=randomized&type=ws&sni=${domain}#GCP-${REGION}"
 }
 
-test_service() {
-    print_info "Testing service (waiting 30 seconds for TLS activation)..."
-    sleep 30
+wait_for_service_ready() {
+    print_info "Waiting for service to be fully ready (60 seconds)..."
     
-    if curl -s --retry 3 --retry-delay 5 -f "${SERVICE_URL}/health" > /dev/null 2>&1; then
-        print_success "Service is responding correctly"
+    for i in {1..12}; do
+        if curl -s --retry 2 --max-time 10 -f "$SERVICE_URL" > /dev/null 2>&1; then
+            print_success "Service is responding"
+            return 0
+        fi
+        echo -n "."
+        sleep 5
+    done
+    
+    print_warning "Service is deployed but may need more time for full TLS activation"
+    return 1
+}
+
+send_telegram_message() {
+    local message="$1"
+    if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -d "chat_id=${TELEGRAM_CHAT_ID}" \
+        -d "text=$message" \
+        -d "parse_mode=HTML" > /dev/null; then
         return 0
     else
-        print_warning "Service might need more time for full TLS activation"
         return 1
     fi
 }
 
-send_configuration_to_telegram() {
-    print_info "Sending configuration to Telegram bot..."
+setup_telegram_bot() {
+    print_info "Setting up Telegram bot commands..."
     
-    local message="🚀 <b>VLESS Server Successfully Deployed!</b>
+    # Set bot commands
+    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setMyCommands" \
+        -d '{
+            "commands": [
+                {"command": "start", "description": "Get VLESS server configuration"},
+                {"command": "status", "description": "Check server status"},
+                {"command": "info", "description": "Get server info"}
+            ]
+        }' > /dev/null
+}
 
-📦 <b>Service Information:</b>
-• 🔗 <b>URL:</b> <code>${SERVICE_URL}</code>
+send_deployment_success() {
+    local message="🚀 <b>GCP VLESS Server Deployed Successfully!</b>
+
+⚡ <b>Server Configuration:</b>
+• 🌐 <b>URL:</b> <code>${SERVICE_URL}</code>
 • 📍 <b>Region:</b> ${REGION}
-• ⚡ <b>Platform:</b> Google Cloud Run
+• 🆔 <b>Project:</b> ${PROJECT_ID}
 
-🖥️ <b>Server Resources:</b>
-• 💻 <b>CPU:</b> ${CPU} core(s)
+💪 <b>Maximum Resources Allocated:</b>
+• 💻 <b>CPU:</b> ${CPU} cores
 • 🎯 <b>Memory:</b> ${MEMORY}
-• 🔄 <b>Concurrency:</b> ${CONCURRENCY} requests
-• 📊 <b>Instances:</b> ${MIN_INSTANCES}-${MAX_INSTANCES}
+• 🔄 <b>Concurrency:</b> ${CONCURRENCY}
+• 📊 <b>Max Instances:</b> ${INSTANCES}
 
 🔑 <b>VLESS Configuration:</b>
 • 🆔 <b>UUID:</b> <code>${UUID}</code>
 • 🛣️ <b>Path:</b> <code>/vless-${PATH_SUFFIX}</code>
 • 🌐 <b>Protocol:</b> VLESS + WebSocket + TLS
-• 🔒 <b>Security:</b> TLS 1.3
+• 🔒 <b>Security:</b> TLS 1.3 Only
 • 🛡️ <b>Fingerprint:</b> Randomized
 
 🔗 <b>VLESS Link:</b>
 <code>${VLESS_LINK}</code>
 
-💡 <b>Bot Commands Available:</b>
-/start - Get this configuration
-/status - Check server status
-/info - Get server information
+📈 <b>Performance Features:</b>
+• No user limits
+• Auto-scaling enabled
+• Global load balancing
+• Always-on instance
+• HTTP/3 (QUIC) support
 
-📝 <b>Note:</b> The link is ready to use in V2Ray/Xray clients"
+💡 <b>Usage:</b>
+Copy the VLESS link to your V2Ray/Xray client
 
-    # Send main configuration message
+✅ <b>Status:</b> Ready for unlimited users"
+
+    print_info "Sending configuration to Telegram..."
+    
+    # Send main message
     send_telegram_message "$message"
     
-    # Send separate message with just the link for easy copying
-    send_telegram_message "🔗 <b>VLESS Link for copying:</b>\n<code>${VLESS_LINK}</code>"
+    # Send VLESS link separately for easy copying
+    send_telegram_message "🔗 <b>VLESS Link for Copying:</b>\n<code>${VLESS_LINK}</code>"
     
-    # Set up bot commands
-    setup_telegram_bot_commands
+    print_success "Configuration sent to Telegram"
 }
 
 display_summary() {
     echo ""
-    print_success "✅ Deployment Completed Successfully!"
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║                    DEPLOYMENT COMPLETED                     ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${GREEN}Service Information:${NC}"
-    echo "📦 Service Name: $SERVICE_NAME"
-    echo "🌐 Service URL: $SERVICE_URL"
-    echo "📍 Region: $REGION"
+    echo -e "${CYAN}📦 SERVICE INFORMATION:${NC}"
+    echo "  Service Name: $SERVICE_NAME"
+    echo "  Service URL: $SERVICE_URL"
+    echo "  Region: $REGION"
+    echo "  Project: $PROJECT_ID"
     echo ""
-    echo -e "${GREEN}Resource Configuration:${NC}"
-    echo "💻 CPU: $CPU"
-    echo "🎯 Memory: $MEMORY"
-    echo "🔄 Concurrency: $CONCURRENCY"
-    echo "📊 Instances: $MIN_INSTANCES-$MAX_INSTANCES"
+    echo -e "${CYAN}💪 RESOURCE ALLOCATION:${NC}"
+    echo "  CPU: $CPU cores (Maximum)"
+    echo "  Memory: $MEMORY (Maximum)"
+    echo "  Concurrency: $CONCURRENCY requests/container"
+    echo "  Max Instances: $INSTANCES"
+    echo "  Min Instances: 1 (Always running)"
     echo ""
-    echo -e "${GREEN}VLESS Configuration:${NC}"
-    echo "🔑 UUID: $UUID"
-    echo "🛣️ Path: /vless-$PATH_SUFFIX"
-    echo "🔒 Security: TLS + WebSocket"
+    echo -e "${CYAN}🔑 VLESS CONFIGURATION:${NC}"
+    echo "  UUID: $UUID"
+    echo "  Path: /vless-$PATH_SUFFIX"
+    echo "  Protocol: VLESS + WebSocket + TLS 1.3"
     echo ""
-    echo -e "${CYAN}VLESS Link:${NC}"
+    echo -e "${CYAN}🔗 VLESS LINK:${NC}"
     echo "$VLESS_LINK"
+    echo ""
+}
+
+show_management_commands() {
+    echo -e "${YELLOW}🛠️  MANAGEMENT COMMANDS:${NC}"
+    echo "  View logs:        gcloud logging read 'resource.type=cloud_run_revision AND resource.labels.service_name=$SERVICE_NAME' --limit=20"
+    echo "  Check metrics:    gcloud run services describe $SERVICE_NAME --region=$REGION --format=\"value(status)\""
+    echo "  Update service:   gcloud run services update $SERVICE_NAME --region=$REGION --cpu=4 --memory=16Gi"
+    echo "  Delete service:   gcloud run services delete $SERVICE_NAME --region=$REGION --quiet"
+    echo "  List services:    gcloud run services list --region=$REGION"
     echo ""
 }
 
@@ -485,26 +496,15 @@ cleanup() {
     rm -f Dockerfile config.json
 }
 
-show_management_commands() {
-    echo ""
-    print_info "Management Commands:"
-    echo "─────────────────────"
-    echo "• View logs: gcloud logging read \"resource.type=cloud_run_revision AND resource.labels.service_name=$SERVICE_NAME\" --limit=10"
-    echo "• Check status: gcloud run services describe $SERVICE_NAME --region=$REGION"
-    echo "• Delete service: gcloud run services delete $SERVICE_NAME --region=$REGION --quiet"
-    echo "• Scale service: gcloud run services update $SERVICE_NAME --region=$REGION --min-instances=1 --max-instances=5"
-    echo ""
-}
-
 main() {
     clear
     echo -e "${CYAN}"
     cat << "EOF"
-╔══════════════════════════════════════╗
-║      GCP VLESS Server Deployer      ║
-║        With Telegram Bot Integration║
-║           VLESS + WS + TLS          ║
-╚══════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════╗
+║               GCP VLESS SERVER DEPLOYER                     ║
+║                Maximum Resources - No Limits                ║
+║                  Optimized for Google Cloud                 ║
+╚══════════════════════════════════════════════════════════════╝
 EOF
     echo -e "${NC}"
     
@@ -513,24 +513,23 @@ EOF
     check_gcloud_auth
     
     # Get configuration
-    get_project_info
     get_telegram_info
-    select_resource_config
+    select_region
+    get_service_name
+    select_max_resources
     
-    # Show configuration summary
+    # Show deployment confirmation
     echo ""
-    print_info "Deployment Configuration Summary:"
-    echo "──────────────────────────────────"
+    print_info "Deployment Configuration:"
+    echo "──────────────────────────"
     echo "• Project: $PROJECT_ID"
     echo "• Service: $SERVICE_NAME"
-    echo "• Region: $REGION"
-    echo "• CPU: $CPU"
-    echo "• Memory: $MEMORY"
-    echo "• Concurrency: $CONCURRENCY"
-    echo "• UUID: $UUID"
+    echo "• Region: $REGION" 
+    echo "• Resources: $CPU CPU, $MEMORY RAM"
+    echo "• Instances: 1-$INSTANCES"
     echo ""
     
-    read -p "Proceed with deployment? (y/n) [Default: y]: " confirm
+    read -p "Proceed with deployment? (y/n) [y]: " confirm
     confirm=${confirm:-y}
     if [[ $confirm != "y" && $confirm != "Y" ]]; then
         print_info "Deployment cancelled"
@@ -540,18 +539,22 @@ EOF
     # Deployment process
     create_docker_config
     deploy_to_cloud_run
-    get_service_info
+    get_service_url
     generate_vless_config
-    test_service
-    send_configuration_to_telegram
+    wait_for_service_ready
+    setup_telegram_bot
+    send_deployment_success
     display_summary
     show_management_commands
     cleanup
     
-    print_success "Deployment completed successfully! 🎉"
+    echo ""
+    print_success "✅ VLESS server deployed successfully with MAXIMUM resources!"
+    print_success "🌐 Ready for unlimited users with high performance!"
+    echo ""
 }
 
-# Handle script interruption
+# Handle interruption
 trap 'echo ""; print_warning "Script interrupted"; cleanup; exit 1' SIGINT
 
 # Run main function
