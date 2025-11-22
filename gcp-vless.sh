@@ -1,8 +1,9 @@
 #!/bin/bash
 
-# GCP VLESS Server Deployer - Fully Compatible with Google Cloud
+# GCP VLESS Server Deployer with Telegram Bot Webhook
+# Fully Compatible with Google Cloud Shell
 # Author: Assistant
-# Version: 6.0
+# Version: 7.0
 
 set -e
 
@@ -24,17 +25,18 @@ UUID=""
 PATH_SUFFIX=""
 SERVICE_URL=""
 VLESS_LINK=""
+BOT_SERVICE_NAME=""
+BOT_SERVICE_URL=""
 
-# Google Cloud Compatible Resource Options
-CPU_OPTIONS=("1" "2" "4" "8")
-MEMORY_OPTIONS=("512Mi" "1Gi" "2Gi" "4Gi" "8Gi" "16Gi" "32Gi")
+# Google Cloud compatible configurations
+CPU_OPTIONS=("1" "2" "4")
+MEMORY_OPTIONS=("512Mi" "1Gi" "2Gi" "4Gi" "8Gi")
 
-# Valid CPU-Memory combinations for Google Cloud Run
+# Valid CPU-Memory combinations
 declare -A VALID_COMBINATIONS=(
     ["1"]="512Mi 1Gi 2Gi 4Gi"
-    ["2"]="1Gi 2Gi 4Gi 8Gi 16Gi"
-    ["4"]="2Gi 4Gi 8Gi 16Gi 32Gi"
-    ["8"]="4Gi 8Gi 16Gi 32Gi"
+    ["2"]="1Gi 2Gi 4Gi 8Gi"
+    ["4"]="2Gi 4Gi 8Gi"
 )
 
 print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -42,47 +44,69 @@ print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-check_dependencies() {
-    print_info "Checking Google Cloud environment..."
+check_environment() {
+    print_info "Checking Google Cloud Shell environment..."
     
-    if ! command -v gcloud &> /dev/null; then
-        print_error "This script must run in Google Cloud Shell"
-        exit 1
+    # Check if running in Google Cloud Shell
+    if [[ -z "$CLOUD_SHELL" ]]; then
+        print_warning "This script is optimized for Google Cloud Shell"
     fi
-    print_success "Google Cloud environment verified"
+    
+    # Check essential commands
+    local commands=("gcloud" "curl")
+    for cmd in "${commands[@]}"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            print_error "$cmd not found. This script requires Google Cloud Shell."
+            exit 1
+        fi
+    done
+    
+    print_success "Environment check passed"
 }
 
-check_gcloud_auth() {
-    if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q .; then
-        print_warning "Google Cloud authentication required"
-        gcloud auth login --no-launch-browser
+check_authentication() {
+    print_info "Checking Google Cloud authentication..."
+    
+    if ! gcloud auth list --format="value(account)" | grep -q "@"; then
+        print_warning "Please login to Google Cloud"
+        if ! gcloud auth login --no-launch-browser; then
+            print_error "Authentication failed"
+            exit 1
+        fi
     fi
     
+    # Set project
     PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
     if [[ -z "$PROJECT_ID" ]]; then
-        print_info "No project configured"
+        print_info "No project set. Please select a project:"
         list_projects
     else
         print_info "Current project: $PROJECT_ID"
         read -p "Use this project? (y/n) [y]: " use_current
-        use_current=${use_current:-y}
-        if [[ $use_current != "y" ]]; then
+        if [[ "${use_current:-y}" != "y" ]]; then
             list_projects
         fi
     fi
 }
 
 list_projects() {
-    print_info "Available Google Cloud Projects:"
-    echo ""
-    gcloud projects list --format="table(projectId,name)" --sort-by=projectId
+    print_info "Fetching Google Cloud projects..."
+    
+    local projects=$(gcloud projects list --format="value(projectId)" 2>/dev/null)
+    if [[ -z "$projects" ]]; then
+        print_error "No projects found or no access"
+        exit 1
+    fi
     
     echo ""
+    gcloud projects list --format="table(projectId,name)" --limit=10
+    
     while true; do
+        echo ""
         read -p "Enter Project ID: " PROJECT_ID
         if [[ -n "$PROJECT_ID" ]]; then
-            if gcloud projects describe $PROJECT_ID &>/dev/null; then
-                gcloud config set project $PROJECT_ID
+            if gcloud projects describe "$PROJECT_ID" &>/dev/null; then
+                gcloud config set project "$PROJECT_ID"
                 print_success "Project set to: $PROJECT_ID"
                 break
             else
@@ -92,138 +116,127 @@ list_projects() {
     done
 }
 
-get_telegram_info() {
+get_telegram_config() {
     echo ""
     print_info "Telegram Bot Configuration"
     echo "============================"
     
     while true; do
         read -p "Enter Telegram Bot Token: " TELEGRAM_BOT_TOKEN
-        if [[ -n "$TELEGRAM_BOT_TOKEN" ]]; then
-            if [[ $TELEGRAM_BOT_TOKEN =~ ^[0-9]+:[a-zA-Z0-9_-]+$ ]]; then
+        if [[ -n "$TELEGRAM_BOT_TOKEN" && "$TELEGRAM_BOT_TOKEN" =~ ^[0-9]+:[a-zA-Z0-9_-]+$ ]]; then
+            # Verify token
+            if curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | grep -q \"ok\":true; then
+                BOT_USERNAME=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | grep -o '"username":"[^"]*' | cut -d'"' -f4)
+                print_success "Bot verified: @$BOT_USERNAME"
                 break
             else
-                print_error "Invalid bot token format"
+                print_error "Invalid bot token"
             fi
         else
-            print_error "Bot token is required"
+            print_error "Invalid token format"
         fi
     done
     
-    # Verify bot
-    print_info "Verifying bot..."
-    BOT_INFO=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe")
-    if echo "$BOT_INFO" | grep -q \"ok\":true; then
-        BOT_USERNAME=$(echo "$BOT_INFO" | grep -o '"username":"[^"]*' | cut -d'"' -f4)
-        print_success "Bot verified: @$BOT_USERNAME"
-    else
-        print_error "Invalid bot token"
-        exit 1
-    fi
-    
     echo ""
-    print_info "Enter your personal Chat ID for admin notifications:"
-    read -p "Chat ID: " TELEGRAM_CHAT_ID
+    print_info "Enter your Chat ID for admin notifications:"
+    while true; do
+        read -p "Chat ID: " TELEGRAM_CHAT_ID
+        if [[ -n "$TELEGRAM_CHAT_ID" ]]; then
+            break
+        else
+            print_error "Chat ID is required"
+        fi
+    done
 }
 
 select_region() {
     echo ""
     print_info "Select Google Cloud Region:"
     echo "1. us-central1 (Iowa, USA) - Recommended"
-    echo "2. us-east1 (South Carolina, USA)"
-    echo "3. us-west1 (Oregon, USA)" 
-    echo "4. europe-west1 (Belgium, Europe)"
-    echo "5. europe-west4 (Netherlands, Europe)"
-    echo "6. asia-east1 (Taiwan, Asia)"
-    echo "7. asia-southeast1 (Singapore, Asia)"
-    echo "8. me-west1 (Tel Aviv, Middle East)"
+    echo "2. europe-west1 (Belgium, Europe)"
+    echo "3. asia-southeast1 (Singapore, Asia)"
+    echo "4. me-west1 (Israel, Middle East)"
     
     while true; do
-        read -p "Select region (1-8) [1]: " region_choice
-        region_choice=${region_choice:-1}
-        case $region_choice in
+        read -p "Choose region (1-4) [1]: " choice
+        choice=${choice:-1}
+        case $choice in
             1) REGION="us-central1"; break ;;
-            2) REGION="us-east1"; break ;;
-            3) REGION="us-west1"; break ;;
-            4) REGION="europe-west1"; break ;;
-            5) REGION="europe-west4"; break ;;
-            6) REGION="asia-east1"; break ;;
-            7) REGION="asia-southeast1"; break ;;
-            8) REGION="me-west1"; break ;;
-            *) print_error "Invalid choice. Select 1-8" ;;
+            2) REGION="europe-west1"; break ;;
+            3) REGION="asia-southeast1"; break ;;
+            4) REGION="me-west1"; break ;;
+            *) print_error "Invalid choice" ;;
         esac
     done
-    print_success "Selected Region: $REGION"
+    print_success "Selected region: $REGION"
 }
 
-get_service_name() {
+get_service_names() {
     echo ""
-    read -p "Enter service name [vless-server]: " SERVICE_NAME
-    SERVICE_NAME=${SERVICE_NAME:-vless-server}
+    print_info "Service Names Configuration"
+    
+    read -p "Enter VLESS service name [vless-proxy]: " SERVICE_NAME
+    SERVICE_NAME=${SERVICE_NAME:-vless-proxy}
+    
+    BOT_SERVICE_NAME="${SERVICE_NAME}-bot"
+    
+    print_info "VLESS Service: $SERVICE_NAME"
+    print_info "Bot Service: $BOT_SERVICE_NAME"
     
     # Generate unique identifiers
     UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)
-    PATH_SUFFIX=$(head /dev/urandom 2>/dev/null | tr -dc a-z0-9 | head -c 10)
+    PATH_SUFFIX=$(head /dev/urandom 2>/dev/null | tr -dc a-z0-9 | head -c 8)
 }
 
-select_cpu() {
+select_resources() {
     echo ""
     print_info "Select CPU Cores:"
-    echo "1. 1 CPU Core (Basic)"
-    echo "2. 2 CPU Cores (Recommended)"
-    echo "3. 4 CPU Cores (High Performance)" 
-    echo "4. 8 CPU Cores (Maximum)"
+    echo "1. 1 CPU (Basic)"
+    echo "2. 2 CPU (Recommended)"
+    echo "3. 4 CPU (High Performance)"
     
     while true; do
-        read -p "Select CPU (1-4) [2]: " cpu_choice
+        read -p "Choose CPU (1-3) [2]: " cpu_choice
         cpu_choice=${cpu_choice:-2}
         case $cpu_choice in
             1) SELECTED_CPU="1"; break ;;
             2) SELECTED_CPU="2"; break ;;
             3) SELECTED_CPU="4"; break ;;
-            4) SELECTED_CPU="8"; break ;;
-            *) print_error "Invalid choice. Select 1-4" ;;
+            *) print_error "Invalid choice" ;;
         esac
     done
-}
-
-select_memory() {
+    
     echo ""
     print_info "Available Memory for $SELECTED_CPU CPU:"
     
-    # Get valid memory options for selected CPU
+    # Get valid memory options
     VALID_MEMORIES=(${VALID_COMBINATIONS[$SELECTED_CPU]})
     
     for i in "${!VALID_MEMORIES[@]}"; do
-        echo "$((i+1)). ${VALID_MEMORIES[$i]}"
+        echo "$((i+1)). ${VALID_MEMORIES[i]}"
     done
     
     while true; do
-        read -p "Select memory (1-${#VALID_MEMORIES[@]}) [3]: " memory_choice
-        memory_choice=${memory_choice:-3}
-        if [[ $memory_choice -ge 1 && $memory_choice -le ${#VALID_MEMORIES[@]} ]]; then
-            SELECTED_MEMORY="${VALID_MEMORIES[$((memory_choice-1))]}"
+        read -p "Choose memory (1-${#VALID_MEMORIES[@]}) [2]: " mem_choice
+        mem_choice=${mem_choice:-2}
+        if [[ $mem_choice -ge 1 && $mem_choice -le ${#VALID_MEMORIES[@]} ]]; then
+            SELECTED_MEMORY="${VALID_MEMORIES[$((mem_choice-1))]}"
             break
         else
-            print_error "Invalid choice. Select 1-${#VALID_MEMORIES[@]}"
+            print_error "Invalid choice"
         fi
     done
-}
-
-select_resources() {
-    select_cpu
-    select_memory
     
     echo ""
     print_success "Selected Resources:"
     echo "• CPU: $SELECTED_CPU cores"
     echo "• Memory: $SELECTED_MEMORY"
-    echo "• Max Instances: 100"
-    echo "• Min Instances: 1 (Always running)"
+    echo "• Max Instances: 10"
+    echo "• Min Instances: 1"
 }
 
-create_docker_config() {
-    print_info "Creating Docker configuration..."
+create_vless_dockerfile() {
+    print_info "Creating VLESS server configuration..."
     
     cat > Dockerfile << 'EOF'
 FROM alpine:latest
@@ -291,6 +304,110 @@ EOF
 EOF
 }
 
+create_bot_dockerfile() {
+    print_info "Creating Telegram bot configuration..."
+    
+    cat > bot.Dockerfile << 'EOF'
+FROM python:3.9-slim
+
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt bot.py ./
+
+RUN pip install -r requirements.txt
+
+EXPOSE 8080
+
+CMD ["python", "bot.py"]
+EOF
+
+    cat > requirements.txt << 'EOF'
+flask==2.3.3
+requests==2.31.0
+EOF
+
+    cat > bot.py << EOF
+import os
+import requests
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+# Configuration
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+VLESS_LINK = os.environ.get('VLESS_LINK')
+SERVICE_URL = os.environ.get('SERVICE_URL')
+ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID')
+
+def send_message(chat_id, text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': 'HTML'
+    }
+    try:
+        requests.post(url, json=data, timeout=10)
+    except Exception as e:
+        print(f"Error sending message: {e}")
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    try:
+        data = request.get_json()
+        
+        if 'message' in data:
+            chat_id = data['message']['chat']['id']
+            text = data['message'].get('text', '')
+            
+            if text == '/start':
+                message = f"""🚀 <b>Welcome to VLESS Server!</b>
+
+🔗 <b>Your VLESS Configuration:</b>
+<code>{VLESS_LINK}</code>
+
+📋 <b>How to use:</b>
+1. Copy the link above
+2. Paste in your V2Ray/Xray client
+3. Connect and enjoy!
+
+⚡ <b>Server Info:</b>
+• Status: ✅ Online
+• Protocol: VLESS + WS + TLS
+• Region: {SERVICE_URL.split('.')[1] if SERVICE_URL else 'Unknown'}
+
+💡 <b>Support:</b>
+Contact admin for help."""
+                send_message(chat_id, message)
+                
+            elif text == '/status':
+                send_message(chat_id, "✅ Server is online and running!")
+                
+            elif text == '/info':
+                info_msg = f"""📊 <b>Server Information:</b>
+
+🌐 Domain: {SERVICE_URL}
+🔧 Protocol: VLESS
+🔒 Security: TLS 1.3
+🛡️ Fingerprint: Randomized"""
+                send_message(chat_id, info_msg)
+        
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return jsonify({'status': 'error'})
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy'})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080, debug=False)
+EOF
+}
+
 enable_services() {
     print_info "Enabling required Google Cloud services..."
     
@@ -301,28 +418,33 @@ enable_services() {
     )
     
     for service in "${services[@]}"; do
-        if ! gcloud services list --enabled --filter="name:$service" | grep -q "$service"; then
-            gcloud services enable "$service" --quiet
+        if ! gcloud services list --enabled --filter="name:${service}" | grep -q "${service}"; then
+            print_info "Enabling ${service}..."
+            if ! gcloud services enable "${service}" --quiet; then
+                print_error "Failed to enable ${service}"
+                exit 1
+            fi
         fi
     done
+    print_success "All required services are enabled"
 }
 
-deploy_to_cloud_run() {
-    print_info "Deploying to Google Cloud Run..."
+deploy_vless_service() {
+    print_info "Deploying VLESS server..."
     
     enable_services
     
     # Build container
-    print_info "Building container image..."
-    if ! gcloud builds submit --tag "gcr.io/$PROJECT_ID/$SERVICE_NAME" --quiet; then
-        print_error "Container build failed"
+    print_info "Building VLESS container..."
+    if ! gcloud builds submit --tag "gcr.io/${PROJECT_ID}/${SERVICE_NAME}" --quiet; then
+        print_error "Failed to build VLESS container"
         exit 1
     fi
     
     # Deploy service
-    print_info "Deploying service..."
+    print_info "Deploying VLESS service..."
     if ! gcloud run deploy "$SERVICE_NAME" \
-        --image "gcr.io/$PROJECT_ID/$SERVICE_NAME" \
+        --image "gcr.io/${PROJECT_ID}/${SERVICE_NAME}" \
         --platform managed \
         --region "$REGION" \
         --allow-unauthenticated \
@@ -330,97 +452,163 @@ deploy_to_cloud_run() {
         --cpu "$SELECTED_CPU" \
         --memory "$SELECTED_MEMORY" \
         --min-instances 1 \
-        --max-instances 100 \
+        --max-instances 10 \
         --execution-environment gen2 \
         --quiet; then
-        print_error "Deployment failed"
+        print_error "VLESS service deployment failed"
         exit 1
     fi
     
-    print_success "Service deployed successfully"
+    print_success "VLESS service deployed successfully"
 }
 
-get_service_url() {
+deploy_bot_service() {
+    print_info "Deploying Telegram bot service..."
+    
+    # Build bot container
+    print_info "Building bot container..."
+    if ! gcloud builds submit --tag "gcr.io/${PROJECT_ID}/${BOT_SERVICE_NAME}" --quiet; then
+        print_error "Failed to build bot container"
+        exit 1
+    fi
+    
+    # Deploy bot service
+    print_info "Deploying bot service..."
+    if ! gcloud run deploy "$BOT_SERVICE_NAME" \
+        --image "gcr.io/${PROJECT_ID}/${BOT_SERVICE_NAME}" \
+        --platform managed \
+        --region "$REGION" \
+        --allow-unauthenticated \
+        --port 8080 \
+        --cpu 1 \
+        --memory "512Mi" \
+        --set-env-vars="BOT_TOKEN=${TELEGRAM_BOT_TOKEN},VLESS_LINK=${VLESS_LINK},SERVICE_URL=${SERVICE_URL},ADMIN_CHAT_ID=${TELEGRAM_CHAT_ID}" \
+        --min-instances 0 \
+        --max-instances 3 \
+        --execution-environment gen2 \
+        --quiet; then
+        print_error "Bot service deployment failed"
+        exit 1
+    fi
+    
+    print_success "Bot service deployed successfully"
+}
+
+get_service_urls() {
+    print_info "Getting service URLs..."
+    
     SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
         --platform managed \
         --region "$REGION" \
         --format="value(status.url)" 2>/dev/null)
     
-    if [[ -z "$SERVICE_URL" ]]; then
-        print_error "Failed to get service URL"
+    BOT_SERVICE_URL=$(gcloud run services describe "$BOT_SERVICE_NAME" \
+        --platform managed \
+        --region "$REGION" \
+        --format="value(status.url)" 2>/dev/null)
+    
+    if [[ -z "$SERVICE_URL" || -z "$BOT_SERVICE_URL" ]]; then
+        print_error "Failed to get service URLs"
         exit 1
     fi
 }
 
 generate_vless_config() {
     local domain=$(echo "$SERVICE_URL" | sed 's|https://||')
-    VLESS_LINK="vless://${UUID}@${domain}:443?path=%2Fvless-${PATH_SUFFIX}&security=tls&alpn=h3%2Ch2%2Chttp%2F1.1&encryption=none&host=${domain}&fp=randomized&type=ws&sni=${domain}#${SERVICE_NAME}"
+    VLESS_LINK="vless://${UUID}@${domain}:443?path=%2Fvless-${PATH_SUFFIX}&security=tls&alpn=h3%2Ch2%2Chttp%2F1.1&encryption=none&host=${domain}&fp=randomized&type=ws&sni=${domain}#GCP-${REGION}"
 }
 
-wait_for_service() {
-    print_info "Waiting for service to be ready..."
-    sleep 30
+setup_webhook() {
+    print_info "Setting up Telegram webhook..."
     
-    if curl -s --retry 3 --max-time 10 -f "$SERVICE_URL" > /dev/null 2>&1; then
-        print_success "Service is ready"
+    local webhook_url="${BOT_SERVICE_URL}/webhook"
+    
+    # Set webhook
+    if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+        -d "url=${webhook_url}" \
+        -d "max_connections=100" \
+        -d "allowed_updates=[\"message\"]" | grep -q \"ok\":true; then
+        print_success "Webhook set successfully"
     else
-        print_warning "Service deployed but may need more time for TLS"
+        print_warning "Failed to set webhook"
+    fi
+    
+    # Set bot commands
+    if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setMyCommands" \
+        -d '{"commands": [{"command": "start", "description": "Get VLESS configuration"}, {"command": "status", "description": "Check server status"}, {"command": "info", "description": "Server information"}]}' | grep -q \"ok\":true; then
+        print_success "Bot commands set successfully"
+    else
+        print_warning "Failed to set bot commands"
     fi
 }
 
-setup_telegram_bot() {
-    print_info "Setting up Telegram bot..."
-    
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setMyCommands" \
-        -d '{
-            "commands": [
-                {"command": "start", "description": "Get VLESS configuration"},
-                {"command": "status", "description": "Check server status"},
-                {"command": "info", "description": "Server information"}
-            ]
-        }' > /dev/null
-}
-
-send_telegram_message() {
-    local message="$1"
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d "chat_id=${TELEGRAM_CHAT_ID}" \
-        -d "text=$message" \
-        -d "parse_mode=HTML" > /dev/null
-}
-
-send_deployment_info() {
+send_admin_notification() {
     local domain=$(echo "$SERVICE_URL" | sed 's|https://||')
     
-    local message="🚀 <b>GCP VLESS Server Deployed Successfully!</b>
+    local message="🚀 <b>GCP VLESS Deployment Successful!</b>
 
-⚡ <b>Server Information:</b>
-• 🌐 <b>URL:</b> <code>${SERVICE_URL}</code>
-• 📍 <b>Region:</b> ${REGION}
-• 🆔 <b>Project:</b> ${PROJECT_ID}
-• 🔧 <b>Service:</b> ${SERVICE_NAME}
-• 🌍 <b>Domain:</b> ${domain}
+📦 <b>Service Information:</b>
+• Project: <code>${PROJECT_ID}</code>
+• Service: ${SERVICE_NAME}
+• Region: ${REGION}
+• Resources: ${SELECTED_CPU} CPU | ${SELECTED_MEMORY} RAM
+• Domain: ${domain}
 
-💪 <b>Resource Configuration:</b>
-• 💻 <b>CPU:</b> ${SELECTED_CPU} cores
-• 🎯 <b>Memory:</b> ${SELECTED_MEMORY}
-• 📊 <b>Instances:</b> 1-100 (Auto-scaling)
+🔗 <b>VLESS Configuration:</b>
+• UUID: <code>${UUID}</code>
+• Path: /vless-${PATH_SUFFIX}
+• Protocol: VLESS + WS + TLS
 
-🔑 <b>VLESS Configuration:</b>
-• 🆔 <b>UUID:</b> <code>${UUID}</code>
-• 🛣️ <b>Path:</b> <code>/vless-${PATH_SUFFIX}</code>
-• 🌐 <b>Protocol:</b> VLESS + WebSocket + TLS
-• 🔒 <b>Security:</b> TLS 1.3
-• 🛡️ <b>Fingerprint:</b> Randomized
+🤖 <b>Bot Information:</b>
+• Bot: @${BOT_USERNAME}
+• Webhook: ${BOT_SERVICE_URL}/webhook
+• Commands: /start, /status, /info
 
 🔗 <b>VLESS Link:</b>
 <code>${VLESS_LINK}</code>
 
-✅ <b>Status:</b> Ready for unlimited users"
+✅ <b>Now users can use /start command with your bot to get the configuration!</b>"
 
-    print_info "Sending configuration to Telegram..."
-    send_telegram_message "$message"
-    send_telegram_message "🔗 <b>VLESS Link for Copying:</b>\n<code>${VLESS_LINK}</code>"
+    print_info "Sending admin notification..."
+    
+    if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -d "chat_id=${TELEGRAM_CHAT_ID}" \
+        -d "text=${message}" \
+        -d "parse_mode=HTML" > /dev/null; then
+        print_success "Admin notification sent"
+    else
+        print_warning "Failed to send admin notification"
+    fi
+    
+    # Send VLESS link separately
+    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -d "chat_id=${TELEGRAM_CHAT_ID}" \
+        -d "text=<code>${VLESS_LINK}</code>" \
+        -d "parse_mode=HTML" > /dev/null
+}
+
+wait_for_services() {
+    print_info "Waiting for services to be ready..."
+    sleep 30
+    
+    # Test VLESS service
+    if curl -s --max-time 10 -f "${SERVICE_URL}" > /dev/null 2>&1; then
+        print_success "VLESS service is ready"
+    else
+        print_warning "VLESS service might need more time"
+    fi
+    
+    # Test bot service
+    if curl -s --max-time 10 -f "${BOT_SERVICE_URL}/health" > /dev/null 2>&1; then
+        print_success "Bot service is ready"
+    else
+        print_warning "Bot service might need more time"
+    fi
+}
+
+cleanup() {
+    print_info "Cleaning up temporary files..."
+    rm -f Dockerfile config.json bot.Dockerfile bot.py requirements.txt
 }
 
 display_summary() {
@@ -428,36 +616,39 @@ display_summary() {
     
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║                    DEPLOYMENT COMPLETED                     ║${NC}"
+    echo -e "${GREEN}║                      DEPLOYMENT SUCCESS                     ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${CYAN}📦 SERVICE INFORMATION:${NC}"
+    echo -e "${CYAN}📊 DEPLOYMENT SUMMARY:${NC}"
     echo "  Project: $PROJECT_ID"
-    echo "  Service: $SERVICE_NAME" 
+    echo "  VLESS Service: $SERVICE_NAME"
+    echo "  Bot Service: $BOT_SERVICE_NAME"
     echo "  Region: $REGION"
     echo "  Resources: $SELECTED_CPU CPU | $SELECTED_MEMORY RAM"
     echo "  Domain: $domain"
     echo ""
-    echo -e "${CYAN}🔑 VLESS CONFIGURATION:${NC}"
+    echo -e "${CYAN}🔗 VLESS CONFIGURATION:${NC}"
     echo "  UUID: $UUID"
     echo "  Path: /vless-$PATH_SUFFIX"
+    echo "  Protocol: VLESS + WebSocket + TLS"
     echo ""
-    echo -e "${CYAN}🔗 VLESS LINK:${NC}"
+    echo -e "${CYAN}🤖 BOT INFORMATION:${NC}"
+    echo "  Bot: @$BOT_USERNAME"
+    echo "  Webhook: $BOT_SERVICE_URL/webhook"
+    echo "  Commands: /start, /status, /info"
+    echo ""
+    echo -e "${GREEN}🔗 VLESS LINK:${NC}"
     echo "$VLESS_LINK"
     echo ""
 }
 
 show_management_commands() {
     echo -e "${YELLOW}🛠️  MANAGEMENT COMMANDS:${NC}"
-    echo "  View logs:        gcloud logging read 'resource.type=cloud_run_revision AND resource.labels.service_name=$SERVICE_NAME' --limit=10"
-    echo "  Check status:     gcloud run services describe $SERVICE_NAME --region=$REGION"
-    echo "  Update resources: gcloud run services update $SERVICE_NAME --region=$REGION --cpu=2 --memory=4Gi"
-    echo "  Delete service:   gcloud run services delete $SERVICE_NAME --region=$REGION --quiet"
+    echo "  View VLESS logs: gcloud logging read 'resource.type=cloud_run_revision resource.labels.service_name=$SERVICE_NAME' --limit=10"
+    echo "  View Bot logs: gcloud logging read 'resource.type=cloud_run_revision resource.labels.service_name=$BOT_SERVICE_NAME' --limit=10"
+    echo "  Check services: gcloud run services list --region=$REGION"
+    echo "  Delete services: gcloud run services delete $SERVICE_NAME $BOT_SERVICE_NAME --region=$REGION --quiet"
     echo ""
-}
-
-cleanup() {
-    rm -f Dockerfile config.json
 }
 
 main() {
@@ -465,57 +656,62 @@ main() {
     echo -e "${CYAN}"
     cat << "EOF"
 ╔══════════════════════════════════════════════════════════════╗
-║               GCP VLESS SERVER DEPLOYER                     ║
-║              Fully Google Cloud Compatible                  ║
+║               GCP VLESS + Telegram Bot                      ║
+║               Complete Deployment Solution                  ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
     echo -e "${NC}"
     
-    # Initial setup
-    check_dependencies
-    check_gcloud_auth
+    # Initial checks
+    check_environment
+    check_authentication
     
     # Configuration
-    get_telegram_info
+    get_telegram_config
     select_region
-    get_service_name
+    get_service_names
     select_resources
     
-    # Confirmation
+    # Display configuration
     echo ""
     print_info "Deployment Configuration:"
     echo "──────────────────────────"
     echo "• Project: $PROJECT_ID"
-    echo "• Service: $SERVICE_NAME"
     echo "• Region: $REGION"
-    echo "• Resources: $SELECTED_CPU CPU | $SELECTED_MEMORY RAM"
+    echo "• VLESS Service: $SERVICE_NAME"
+    echo "• Bot Service: $BOT_SERVICE_NAME"
+    echo "• Resources: $SELECTED_CPU CPU, $SELECTED_MEMORY RAM"
     echo ""
     
     read -p "Proceed with deployment? (y/n) [y]: " confirm
-    confirm=${confirm:-y}
-    if [[ $confirm != "y" ]]; then
+    if [[ "${confirm:-y}" != "y" ]]; then
         print_info "Deployment cancelled"
         exit 0
     fi
     
-    # Deployment
-    create_docker_config
-    deploy_to_cloud_run
-    get_service_url
+    # Deployment process
+    create_vless_dockerfile
+    deploy_vless_service
+    
+    create_bot_dockerfile
+    deploy_bot_service
+    
+    get_service_urls
     generate_vless_config
-    wait_for_service
-    setup_telegram_bot
-    send_deployment_info
+    setup_webhook
+    wait_for_services
+    send_admin_notification
     display_summary
     show_management_commands
     cleanup
     
     echo ""
-    print_success "✅ VLESS server deployed successfully!"
-    print_success "🌐 Server URL: $SERVICE_URL"
+    print_success "✅ Deployment completed successfully!"
+    print_success "🤖 Users can now use /start with @$BOT_USERNAME to get the configuration!"
     echo ""
 }
 
-trap 'echo ""; print_warning "Script interrupted"; cleanup; exit 1' SIGINT
+# Error handling
+trap 'echo ""; print_error "Script interrupted"; cleanup; exit 1' SIGINT
 
 main "$@"
