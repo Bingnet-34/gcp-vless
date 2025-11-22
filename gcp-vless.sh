@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# GCP V2Ray VLESS Server Deployer with Resource Selection
-# Complete Working Version
+# GCP V2Ray VLESS Server Deployer - No Owner Restrictions
+# With Start/Stop Management
 # Author: Assistant
-# Version: 10.0
+# Version: 11.0
 
 set -e
 
@@ -21,7 +21,6 @@ SERVICE_NAME=""
 BOT_SERVICE_NAME=""
 REGION="us-central1"
 TELEGRAM_BOT_TOKEN=""
-TELEGRAM_CHAT_ID=""
 UUID=""
 PATH_SUFFIX=""
 SERVICE_URL=""
@@ -30,11 +29,11 @@ VLESS_LINK=""
 SELECTED_CPU=""
 SELECTED_MEMORY=""
 
-# Resource options - Max 8 CPU and 16Gi RAM as requested
+# Resource options
 CPU_OPTIONS=("1" "2" "4" "8")
 MEMORY_OPTIONS=("512Mi" "1Gi" "2Gi" "4Gi" "8Gi" "16Gi")
 
-# Valid CPU-Memory combinations for Google Cloud Run
+# Valid CPU-Memory combinations
 declare -A VALID_COMBINATIONS=(
     ["1"]="512Mi 1Gi 2Gi 4Gi"
     ["2"]="1Gi 2Gi 4Gi 8Gi"
@@ -46,6 +45,25 @@ print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+show_menu() {
+    clear
+    echo -e "${CYAN}"
+    cat << "EOF"
+╔══════════════════════════════════════════════════════════════╗
+║                 V2Ray VLESS Server Manager                  ║
+║                   Google Cloud Platform                     ║
+╚══════════════════════════════════════════════════════════════╝
+EOF
+    echo -e "${NC}"
+    
+    echo "1. Deploy New V2Ray VLESS Server"
+    echo "2. Stop/Delete Existing Server"
+    echo "3. List All Services"
+    echo "4. Check Service Status"
+    echo "5. Exit"
+    echo ""
+}
 
 check_environment() {
     print_info "Checking Google Cloud environment..."
@@ -125,17 +143,6 @@ get_telegram_config() {
             fi
         else
             print_error "Invalid token format"
-        fi
-    done
-    
-    echo ""
-    print_info "Enter your Chat ID for admin notifications:"
-    while true; do
-        read -p "Chat ID: " TELEGRAM_CHAT_ID
-        if [[ -n "$TELEGRAM_CHAT_ID" ]]; then
-            break
-        else
-            print_error "Chat ID is required"
         fi
     done
 }
@@ -340,7 +347,6 @@ app = Flask(__name__)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 VLESS_LINK = os.environ.get('VLESS_LINK')
 SERVICE_URL = os.environ.get('SERVICE_URL')
-ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID')
 
 def send_telegram_message(chat_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -381,8 +387,7 @@ def webhook():
 • Protocol: V2Ray + VLESS + WS + TLS
 • Domain: {SERVICE_URL.split('//')[1] if SERVICE_URL else 'N/A'}
 
-💡 <b>Support:</b>
-Contact administrator for help."""
+💡 <b>Note:</b> This server is available for all users"""
                 
                 send_telegram_message(chat_id, message)
                 
@@ -396,7 +401,8 @@ Contact administrator for help."""
 🔧 Service: VLESS Server
 🔒 Security: TLS 1.3
 🛡️ Fingerprint: Randomized
-⚡ Performance: High Speed"""
+⚡ Performance: High Speed
+👥 Users: Unlimited"""
                 
                 send_telegram_message(chat_id, info_msg)
         
@@ -488,7 +494,7 @@ deploy_bot_service() {
         --port 8080 \
         --cpu 1 \
         --memory "512Mi" \
-        --set-env-vars="BOT_TOKEN=${TELEGRAM_BOT_TOKEN},VLESS_LINK=${VLESS_LINK},SERVICE_URL=${SERVICE_URL},ADMIN_CHAT_ID=${TELEGRAM_CHAT_ID}" \
+        --set-env-vars="BOT_TOKEN=${TELEGRAM_BOT_TOKEN},VLESS_LINK=${VLESS_LINK},SERVICE_URL=${SERVICE_URL}" \
         --min-instances 0 \
         --max-instances 5 \
         --execution-environment gen2 \
@@ -525,7 +531,7 @@ get_service_urls() {
 generate_vless_link() {
     local domain=$(echo "$SERVICE_URL" | sed 's|https://||')
     
-    # Create exact VLESS link format as requested
+    # Create exact VLESS link format
     VLESS_LINK="vless://${UUID}@${domain}:443?path=%2F${PATH_SUFFIX}&security=tls&alpn=h3%2Ch2%2Chttp%2F1.1&encryption=none&host=${domain}&fp=randomized&type=ws&sni=${domain}#${SERVICE_NAME}"
     
     print_success "VLESS link generated"
@@ -573,69 +579,12 @@ wait_for_services() {
     fi
 }
 
-send_telegram_message() {
-    local message="$1"
-    if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d "chat_id=${TELEGRAM_CHAT_ID}" \
-        -d "text=$message" \
-        -d "parse_mode=HTML" > /dev/null; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-send_admin_notification() {
-    local domain=$(echo "$SERVICE_URL" | sed 's|https://||')
-    
-    local message="🚀 <b>V2Ray VLESS Server Successfully Deployed!</b>
-
-📊 <b>Deployment Information:</b>
-• 🆔 <b>Project:</b> <code>${PROJECT_ID}</code>
-• 🔧 <b>Service:</b> ${SERVICE_NAME}
-• 📍 <b>Region:</b> ${REGION}
-• 🌐 <b>Domain:</b> ${domain}
-
-💪 <b>Resource Configuration:</b>
-• 💻 <b>CPU:</b> ${SELECTED_CPU} cores
-• 🎯 <b>Memory:</b> ${SELECTED_MEMORY}
-• 📊 <b>Instances:</b> 1-10 (Auto-scaling)
-
-🔑 <b>VLESS Configuration:</b>
-• 🆔 <b>UUID:</b> <code>${UUID}</code>
-• 🛣️ <b>Path:</b> <code>/${PATH_SUFFIX}</code>
-• 🌐 <b>Protocol:</b> V2Ray + VLESS + WebSocket + TLS
-• 🔒 <b>Security:</b> TLS 1.3
-• 🛡️ <b>Fingerprint:</b> Randomized
-
-🤖 <b>Bot Information:</b>
-• 🤖 <b>Bot:</b> @${BOT_USERNAME}
-• 🔗 <b>Webhook:</b> ${BOT_SERVICE_URL}/webhook
-• 📝 <b>Commands:</b> /start, /status, /info
-
-🔗 <b>VLESS Link:</b>
-<code>${VLESS_LINK}</code>
-
-✅ <b>Now users can use /start command with @${BOT_USERNAME} to get the configuration!</b>"
-
-    print_info "Sending deployment notification to admin..."
-    
-    if send_telegram_message "$message"; then
-        print_success "Admin notification sent"
-    else
-        print_warning "Failed to send admin notification"
-    fi
-    
-    # Send VLESS link separately for easy copying
-    send_telegram_message "🔗 <b>VLESS Link for Copying:</b>\n<code>${VLESS_LINK}</code>"
-}
-
-cleanup() {
+cleanup_files() {
     print_info "Cleaning up temporary files..."
     rm -f Dockerfile config.json bot.Dockerfile bot.py requirements.txt
 }
 
-display_summary() {
+display_deployment_summary() {
     local domain=$(echo "$SERVICE_URL" | sed 's|https://||')
     
     echo ""
@@ -672,17 +621,15 @@ show_management_commands() {
     echo "  View Bot logs: gcloud logging read 'resource.type=cloud_run_revision AND resource.labels.service_name=$BOT_SERVICE_NAME' --limit=10"
     echo "  Check services: gcloud run services list --region=$REGION"
     echo "  Update resources: gcloud run services update $SERVICE_NAME --region=$REGION --cpu=2 --memory=4Gi"
-    echo "  Delete services: gcloud run services delete $SERVICE_NAME $BOT_SERVICE_NAME --region=$REGION --quiet"
     echo ""
 }
 
-main() {
+deploy_new_server() {
     clear
     echo -e "${CYAN}"
     cat << "EOF"
 ╔══════════════════════════════════════════════════════════════╗
-║               V2Ray VLESS Server Deployer                   ║
-║           With Telegram Bot & Resource Selection            ║
+║                 Deploy New V2Ray VLESS Server               ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
     echo -e "${NC}"
@@ -713,7 +660,7 @@ EOF
     read -p "Proceed with deployment? (y/n) [y]: " confirm
     if [[ "${confirm:-y}" != "y" ]]; then
         print_info "Deployment cancelled"
-        exit 0
+        return 1
     fi
     
     # Deployment process
@@ -727,19 +674,181 @@ EOF
     deploy_bot_service
     setup_webhook
     wait_for_services
-    send_admin_notification
-    display_summary
+    display_deployment_summary
     show_management_commands
-    cleanup
+    cleanup_files
     
     echo ""
     print_success "✅ V2Ray VLESS server deployed successfully!"
-    print_success "🤖 Bot is ready! Users can use /start with @$BOT_USERNAME"
+    print_success "🤖 Bot is ready! Any user can use /start with @$BOT_USERNAME"
     print_success "🔗 VLESS Link: $VLESS_LINK"
     echo ""
+    
+    read -p "Press Enter to continue..."
+}
+
+stop_existing_server() {
+    clear
+    echo -e "${CYAN}"
+    cat << "EOF"
+╔══════════════════════════════════════════════════════════════╗
+║                 Stop Existing V2Ray Server                  ║
+╚══════════════════════════════════════════════════════════════╝
+EOF
+    echo -e "${NC}"
+    
+    check_authentication
+    
+    echo ""
+    print_info "Listing all services in project $PROJECT_ID:"
+    echo ""
+    
+    gcloud run services list --region="*" --format="table(NAME,REGION,STATUS)" | head -10
+    
+    echo ""
+    read -p "Enter service name to stop (or press Enter to cancel): " service_to_stop
+    
+    if [[ -z "$service_to_stop" ]]; then
+        print_info "Operation cancelled"
+        return 1
+    fi
+    
+    # Find the region of the service
+    SERVICE_REGION=$(gcloud run services list --filter="NAME:$service_to_stop" --format="value(REGION)" --limit=1)
+    
+    if [[ -z "$SERVICE_REGION" ]]; then
+        print_error "Service '$service_to_stop' not found"
+        return 1
+    fi
+    
+    echo ""
+    print_warning "This will PERMANENTLY delete the service: $service_to_stop"
+    print_warning "Region: $SERVICE_REGION"
+    echo ""
+    
+    read -p "Are you sure you want to delete this service? (y/n) [n]: " confirm_delete
+    if [[ "${confirm_delete:-n}" != "y" ]]; then
+        print_info "Deletion cancelled"
+        return 1
+    fi
+    
+    # Delete the main service
+    print_info "Deleting service: $service_to_stop"
+    if gcloud run services delete "$service_to_stop" --region="$SERVICE_REGION" --quiet; then
+        print_success "Service '$service_to_stop' deleted successfully"
+    else
+        print_error "Failed to delete service '$service_to_stop'"
+    fi
+    
+    # Try to delete bot service if exists
+    BOT_SERVICE="${service_to_stop}-bot"
+    if gcloud run services describe "$BOT_SERVICE" --region="$SERVICE_REGION" &>/dev/null; then
+        print_info "Deleting bot service: $BOT_SERVICE"
+        if gcloud run services delete "$BOT_SERVICE" --region="$SERVICE_REGION" --quiet; then
+            print_success "Bot service '$BOT_SERVICE' deleted successfully"
+        else
+            print_warning "Failed to delete bot service '$BOT_SERVICE'"
+        fi
+    fi
+    
+    echo ""
+    print_success "✅ Server stopped successfully!"
+    echo ""
+    
+    read -p "Press Enter to continue..."
+}
+
+list_all_services() {
+    clear
+    echo -e "${CYAN}"
+    cat << "EOF"
+╔══════════════════════════════════════════════════════════════╗
+║                    All Cloud Run Services                   ║
+╚══════════════════════════════════════════════════════════════╝
+EOF
+    echo -e "${NC}"
+    
+    check_authentication
+    
+    echo ""
+    print_info "Services in project: $PROJECT_ID"
+    echo ""
+    
+    gcloud run services list --region="*" --format="table(NAME,REGION,STATIS,URL)" | head -15
+    
+    echo ""
+    read -p "Press Enter to continue..."
+}
+
+check_service_status() {
+    clear
+    echo -e "${CYAN}"
+    cat << "EOF"
+╔══════════════════════════════════════════════════════════════╗
+║                    Check Service Status                     ║
+╚══════════════════════════════════════════════════════════════╝
+EOF
+    echo -e "${NC}"
+    
+    check_authentication
+    
+    echo ""
+    read -p "Enter service name to check: " service_name
+    
+    if [[ -z "$service_name" ]]; then
+        print_error "Service name is required"
+        return 1
+    fi
+    
+    # Find the service in all regions
+    SERVICE_INFO=$(gcloud run services list --filter="NAME:$service_name" --format="table(NAME,REGION,STATUS,URL)" --limit=5)
+    
+    if [[ -z "$SERVICE_INFO" || "$SERVICE_INFO" == "Listed 0 items." ]]; then
+        print_error "Service '$service_name' not found"
+        return 1
+    fi
+    
+    echo ""
+    print_info "Service Information:"
+    echo "$SERVICE_INFO"
+    echo ""
+    
+    read -p "Press Enter to continue..."
+}
+
+main() {
+    while true; do
+        show_menu
+        read -p "Choose an option (1-5): " choice
+        
+        case $choice in
+            1)
+                deploy_new_server
+                ;;
+            2)
+                stop_existing_server
+                ;;
+            3)
+                list_all_services
+                ;;
+            4)
+                check_service_status
+                ;;
+            5)
+                echo ""
+                print_info "Thank you for using V2Ray VLESS Server Manager!"
+                echo ""
+                exit 0
+                ;;
+            *)
+                print_error "Invalid option. Please choose 1-5."
+                sleep 2
+                ;;
+        esac
+    done
 }
 
 # Error handling
-trap 'echo ""; print_error "Script interrupted"; cleanup; exit 1' SIGINT
+trap 'echo ""; print_error "Script interrupted"; cleanup_files; exit 1' SIGINT
 
 main "$@"
